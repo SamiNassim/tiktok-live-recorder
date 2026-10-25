@@ -121,9 +121,20 @@ func TestFallbackAndKnownLiveWithoutPlayback(t *testing.T) {
 	if err != nil || !s.Live || len(s.Sources) != 1 {
 		t.Fatal(s, err)
 	}
-	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: http.NoBody, Header: make(http.Header)}, nil
-	})}
+}
+
+func TestRateLimitBackoffIsSharedAndDoesNotBlockTheQueue(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(http.StatusTooManyRequests) })
+	if _, err := c.Check(context.Background(), "demo_creator"); !errors.Is(err, ErrRateLimited) {
+		t.Fatal(err)
+	}
+	if _, err := c.Check(context.Background(), "another_demo"); !errors.Is(err, ErrRateLimited) {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("shared rate limit did not suppress further API requests")
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

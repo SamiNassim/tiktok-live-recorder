@@ -96,8 +96,10 @@ func (e *Engine) SaveConfig(c state.Config) error {
 	if err != nil {
 		return err
 	}
-	if _, err = recording.OutputArgs(c.FFmpegArgs); err != nil {
-		return err
+	if c.PostProcess {
+		if _, err = recording.OutputArgs(c.FFmpegArgs); err != nil {
+			return err
+		}
 	}
 	if err = e.store.SaveConfig(c); err != nil {
 		return err
@@ -481,6 +483,7 @@ func (e *Engine) check(id string) {
 }
 
 func (e *Engine) completed(it *item) {
+	immediate := it.row.Status == "Finalizing" || it.row.Streamer.RecordingPaused || it.row.Streamer.Paused
 	r := it.handle.Result()
 	initial := it.handle.File()
 	e.persist(func(d *state.Data) {
@@ -509,6 +512,9 @@ func (e *Engine) completed(it *item) {
 	it.row.Path = ""
 	it.row.Status = "Waiting"
 	it.row.NextCheck = time.Now().Add(5 * time.Second)
+	if immediate {
+		it.row.NextCheck = time.Now()
+	}
 }
 func (e *Engine) persist(change func(*state.Data)) {
 	if err := e.store.Update(func(d *state.Data) error { change(d); return nil }); err != nil {

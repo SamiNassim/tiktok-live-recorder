@@ -42,6 +42,7 @@ type Client struct {
 	cookie        string
 	delay         time.Duration
 	next          time.Time
+	blockedUntil  time.Time
 }
 
 func NewClient() *Client {
@@ -61,6 +62,10 @@ func (c *Client) Configure(cookie string, delay time.Duration) {
 
 func (c *Client) get(ctx context.Context, address string, target any) error {
 	c.mu.Lock()
+	if time.Now().Before(c.blockedUntil) {
+		c.mu.Unlock()
+		return ErrRateLimited
+	}
 	at := maxTime(time.Now(), c.next)
 	c.next = at.Add(c.delay)
 	cookie := c.cookie
@@ -96,7 +101,7 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 		return ErrAccess
 	case http.StatusTooManyRequests:
 		c.mu.Lock()
-		c.next = maxTime(c.next, time.Now().Add(5*time.Minute))
+		c.blockedUntil = time.Now().Add(5 * time.Minute)
 		c.mu.Unlock()
 		return ErrRateLimited
 	case http.StatusOK:
