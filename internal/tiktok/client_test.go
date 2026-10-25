@@ -143,23 +143,25 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestAccountValidationUsesCookiesAndChecksExpiry(t *testing.T) {
 	valid := true
+	calls := 0
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		if !strings.Contains(r.Header.Get("Cookie"), "sessionid=synthetic") {
 			t.Error("cookie missing")
 		}
 		if valid {
-			w.Write([]byte(`{"message":"success","data":{"user_id_str":"7000000000000000002","username":"demo_viewer","screen_name":"Demo Viewer"}}`))
+			w.Write([]byte(`{"message":"success","data":{"user_id_str":"7000000000000000002","username":"demo_viewer","screen_name":"Demo Viewer","avatar_url":"https://cdn.example/avatar.png"}}`))
 		} else {
 			w.Write([]byte(`{"message":"error","data":{"error_code":13}}`))
 		}
 	})
 	c.Configure("sessionid=synthetic; tt-target-idc=testdc", 0)
 	a, err := c.Account(context.Background())
-	if err != nil || a.Username != "demo_viewer" {
+	if err != nil || a.Username != "demo_viewer" || a.Name != "Demo Viewer" || a.Avatar != "https://cdn.example/avatar.png" || calls != 1 {
 		t.Fatal(a, err)
 	}
 	valid = false
-	if _, err = c.Account(context.Background()); err == nil {
+	if _, err = c.Account(context.Background()); !errors.Is(err, ErrSessionExpired) {
 		t.Fatal("accepted expired session")
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -33,9 +34,10 @@ func (a *application) streamers(c *ui.Context) {
 		rows := filteredRows(a.snapshot.Rows, a.query, a.status, a.priority, a.order)
 		a.streamList.Key = func(i int) any { return rows[i].Streamer.ID }
 		a.streamList.KeepOffset = true
+		a.streamList.CellMenu = func(m *ui.Menu, row, _ int) { a.streamMenu(m, rows[row]) }
 		if len(rows) == 0 {
 			ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
-				title, subtitle := "No streamers yet", "Add a TikTok username or profile URL to start monitoring."
+				title, subtitle := "No streamers yet", "Add a TikTok username or profile URL. An account in Settings is optional for public streams."
 				if len(a.snapshot.Rows) > 0 {
 					title = "No matching streamers"
 					subtitle = "Try another search or filter."
@@ -49,7 +51,7 @@ func (a *application) streamers(c *ui.Context) {
 				r := rows[row]
 				switch col {
 				case 0:
-					ui.Row(c).Height(58).Gap(12).AlignItems(ui.Center).ContextMenu(func(m *ui.Menu) { a.streamMenu(m, r) }).Children(func() {
+					ui.Row(c).Height(58).Gap(12).AlignItems(ui.Center).Children(func() {
 						initial, _ := utf8.DecodeRuneInString(r.Streamer.DisplayName())
 						if avatar := a.avatars[r.Streamer.Avatar]; avatar != nil {
 							ui.Image(c, avatar).Size(34, 34).Radius(17)
@@ -228,7 +230,11 @@ func (a *application) logsPage(c *ui.Context) {
 
 func (a *application) recordings(c *ui.Context) {
 	t := c.Theme()
+	hasCompleted := slices.ContainsFunc(a.data.Recordings, func(r state.Recording) bool { return !r.EndedAt.IsZero() })
 	header(c, "Recordings", "Original FLV bytes. No conversion, timestamp changes, or quality loss.", func() {
+		if ui.Button(c, "Clear history…").Disabled(a.busy || a.preview || !hasCompleted).Clicked() {
+			a.clearHistoryOpen = true
+		}
 		if ui.PrimaryButton(c, "Open recordings folder").Clicked() {
 			a.openFolder(a.cfg.RecordingPath)
 		}
@@ -236,6 +242,9 @@ func (a *application) recordings(c *ui.Context) {
 	recordings := slices.Clone(a.data.Recordings)
 	slices.SortFunc(recordings, func(a, b state.Recording) int { return b.StartedAt.Compare(a.StartedAt) })
 	a.recordList.Key = func(i int) any { return recordings[i].ID }
+	a.recordList.KeepOffset = true
+	services := c.Services()
+	a.recordList.CellMenu = func(m *ui.Menu, row, _ int) { a.recordingMenu(m, recordings[row], services) }
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(8).Children(func() {
 		ui.Table(c, &a.recordList, []ui.TableColumn{{Title: "Streamer", Width: 150}, {Title: "Started", Width: 150}, {Title: "Duration", Width: 90}, {Title: "Size", Width: 85}, {Title: "File", MinWidth: 140}, {Title: "", ID: "open", Width: 75}}, len(recordings), func(row, col int) {
 			r := recordings[row]
@@ -264,13 +273,13 @@ func (a *application) recordings(c *ui.Context) {
 				}
 			}
 		}).Grow(1).MinHeight(0).FillWidth()
-		ui.Text(c, fmt.Sprintf("%d recordings in history · files are never removed when a streamer is deleted", len(recordings))).FontSize(11).TextColor(t.TextMuted).Padding(14, 18)
+		ui.Text(c, fmt.Sprintf("%d recordings in history · clearing history never deletes files", len(recordings))).FontSize(11).TextColor(t.TextMuted).Padding(14, 18)
 	})
 }
 
-func section(c *ui.Context, title, subtitle string, body func()) {
+func section(c *ui.Context, title, subtitle string, body func()) ui.Element {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(20).Gap(15).Background(t.Surface).Border(1, t.Border).Radius(8).Children(func() {
+	return ui.Column(c).FillWidth().Padding(20).Gap(15).Background(t.Surface).Border(1, t.Border).Radius(8).Children(func() {
 		ui.Text(c, title).FontSize(16).FontWeight(600)
 		if subtitle != "" {
 			ui.Text(c, subtitle).TextColor(t.TextMuted).FontSize(12).MaxLines(3)
@@ -343,7 +352,14 @@ func (a *application) settings(c *ui.Context) {
 			})
 		}
 	})
-	ui.Scroll(c).TrackScroll(&a.settingsScroll).Grow(1).MinHeight(0).FillWidth().Gap(18).DrawOver(func(p *ui.Painter, r ui.Rect) {
+	if a.accountSettingsRequested {
+		// Reveal from below so the native scroller aligns the section's start,
+		// rather than only bringing its bottom into view. Layout sets the offset.
+		a.settingsScroll.Y = math.MaxInt32
+	}
+	ui.Scroll(c).Label("Settings sections").TrackScroll(&a.settingsScroll).Grow(1).MinHeight(0).FillWidth().Gap(18).DrawOver(func(p *ui.Painter, r ui.Rect) {
+		// A click may rebuild the view before layout; consume only after drawing.
+		a.accountSettingsRequested = false
 		if remaining := a.settingsScroll.MaxY - a.settingsScroll.Y; remaining > 1 {
 			height := min(float32(32), r.H)
 			p.FillGradient(ui.Rect{X: r.X, Y: r.Y + r.H - height, W: max(0, r.W-12), H: height}, ui.LinearGradient{From: t.Background.Alpha(0), To: t.Background.Alpha(min(1, remaining/height)), Angle: 180}, 0)
@@ -352,7 +368,7 @@ func (a *application) settings(c *ui.Context) {
 		section(c, "Monitoring", "One paced queue checks usernames directly. No running browser is needed.", func() {
 			toggle(c, "Enable monitoring", "Check for live streams automatically. Disabling checks does not interrupt an active recording.", &a.cfg.PollingEnabled)
 		})
-		section(c, "TikTok account", "Optional for public streams. A valid account may be needed for login-restricted streams.", func() {
+		accountSection := section(c, "TikTok account", "Optional for public streams. A valid account may be needed for login-restricted streams.", func() {
 			ui.Row(c).Gap(10).FillWidth().Children(func() {
 				if ui.TextInput(c, &a.cfg.Cookie).Password().Placeholder("Paste the Cookie request header").Label("TikTok web cookie").Grow(1).Height(34).Changed() {
 					a.cookieChanged()
@@ -365,7 +381,6 @@ func (a *application) settings(c *ui.Context) {
 					a.validateCookie()
 				}
 			})
-			a.autoValidateCookie(c)
 			if a.accountMessage != "" {
 				color := t.Warning
 				if a.account != nil {
@@ -379,6 +394,9 @@ func (a *application) settings(c *ui.Context) {
 				ui.Text(c, "A new account dedicated to this app is strongly recommended. Your cookies grant account access. If the session expires, copy a fresh Cookie header. The account must have permission to view the stream.").Grow(1).MinWidth(0).FontSize(11)
 			})
 		})
+		if a.accountSettingsRequested {
+			accountSection.ScrollIntoView()
+		}
 		a.pollingQueue(c)
 		section(c, "Recording", "The original CDN FLV is saved byte for byte, without FFmpeg, remuxing, or timestamp changes. Interrupted files are kept.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
@@ -446,6 +464,7 @@ func (a *application) settings(c *ui.Context) {
 
 func (a *application) dialogs(c *ui.Context) {
 	a.ffmpegDialog(c)
+	a.recordingHistoryDialog(c)
 	ui.Modal(c, &a.addOpen, func() {
 		ui.Text(c, "Add a streamer").FontSize(22).FontWeight(600)
 		ui.Text(c, "Paste a TikTok profile/live URL, or enter a username.").TextColor(c.Theme().TextMuted)

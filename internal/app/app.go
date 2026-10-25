@@ -47,6 +47,8 @@ type application struct {
 	logQuery, level                 string
 	streamList, logList, recordList ui.ListState
 	settingsScroll                  ui.ScrollState
+	clearHistoryOpen                bool
+	accountSettingsRequested        bool
 	toasts                          []string
 
 	addOpen, renameOpen, removeOpen              bool
@@ -54,6 +56,8 @@ type application struct {
 	renameID, renameName, removeID               string
 	message, accountMessage                      string
 	account                                      *tiktok.Account
+	accountCookie                                string
+	accountError                                 error
 	busy, validating                             bool
 	ffmpeg, preview                              bool
 	starting                                     bool
@@ -258,6 +262,7 @@ func (a *application) view(c *ui.Context) {
 		dark = a.cfg.Theme == "dark"
 	}
 	c.SetTheme(palette(dark))
+	a.autoValidateCookie(c)
 	t := c.Theme()
 	if a.message != "" {
 		c.AddToast(ui.Toast{Title: a.message, Type: "error", Timeout: 6 * time.Second})
@@ -309,6 +314,7 @@ func (a *application) sidebar(c *ui.Context) {
 		}).Width(192).Grow(1).Background(background)
 		ui.Column(c).Padding(14, 10).Gap(12).Children(func() {
 			ui.Divider(c)
+			a.sessionIndicator(c)
 			ffmpeg := "Raw FLV ready"
 			color := t.Success
 			if a.ffmpeg {
@@ -348,6 +354,9 @@ func (a *application) validateCookie() {
 	raw := a.cfg.Cookie
 	a.cookieLastChecked = raw
 	cookie, err := tiktok.ParseCookie(raw)
+	a.account = nil
+	a.accountCookie = ""
+	a.accountError = err
 	if err != nil || cookie == "" {
 		a.accountMessage = "Paste a signed-in TikTok Cookie header first."
 		if err != nil {
@@ -356,7 +365,6 @@ func (a *application) validateCookie() {
 		return
 	}
 	a.validating = true
-	a.account = nil
 	a.accountMessage = "Validating account…"
 	go func() {
 		client := tiktok.NewClient()
@@ -371,9 +379,12 @@ func (a *application) validateCookie() {
 				return
 			}
 			if err != nil {
+				a.accountError = err
 				a.accountMessage = err.Error()
 			} else {
 				a.account = &account
+				a.accountCookie = cookie
+				a.accountError = nil
 				a.accountMessage = "Authenticated as " + account.Name + " · @" + account.Username
 			}
 		})
@@ -384,6 +395,8 @@ func (a *application) cookieChanged() {
 	a.cookieEditedAt = time.Now()
 	a.cookieLastChecked = ""
 	a.account = nil
+	a.accountCookie = ""
+	a.accountError = nil
 	a.accountMessage = ""
 }
 

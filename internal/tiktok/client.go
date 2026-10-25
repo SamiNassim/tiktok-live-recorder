@@ -13,11 +13,12 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("TikTok account was not found or has never hosted a live")
-	ErrAccess      = errors.New("TikTok requires a valid account or permission to watch this live")
-	ErrUnavailable = errors.New("streamer is live, but TikTok returned no supported FLV stream")
-	ErrBlocked     = errors.New("TikTok returned an unexpected response; access may be temporarily limited")
-	ErrRateLimited = errors.New("TikTok rate limited this connection; checks will back off")
+	ErrNotFound       = errors.New("TikTok account was not found or has never hosted a live")
+	ErrAccess         = errors.New("TikTok requires a valid account or permission to watch this live")
+	ErrUnavailable    = errors.New("streamer is live, but TikTok returned no supported FLV stream")
+	ErrBlocked        = errors.New("TikTok returned an unexpected response; access may be temporarily limited")
+	ErrRateLimited    = errors.New("TikTok rate limited this connection; checks will back off")
+	ErrSessionExpired = errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh Cookie header")
 )
 
 type Source struct {
@@ -183,7 +184,7 @@ func (c *Client) Account(ctx context.Context) (Account, error) {
 		return Account{}, err
 	}
 	if response.Message != "success" || response.Data.ErrorCode != 0 || response.Data.ID == "" || response.Data.Username == "" {
-		return Account{}, errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh Cookie header")
+		return Account{}, ErrSessionExpired
 	}
 	name := response.Data.Name
 	if name == "" {
