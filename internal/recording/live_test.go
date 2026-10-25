@@ -3,13 +3,16 @@ package recording
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"tiktok-live-recorder/internal/ffmpeg"
 	"tiktok-live-recorder/internal/state"
 )
 
@@ -85,5 +88,39 @@ func TestFailedProcessingNeverRemovesRaw(t *testing.T) {
 	got, err := os.ReadFile(source)
 	if err != nil || !bytes.Equal(got, raw) {
 		t.Fatal("raw file lost", err)
+	}
+}
+
+func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
+	path, err := ffmpeg.Find("")
+	if err != nil {
+		t.Skip("FFmpeg is not installed; raw recording tests remain independent")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	source := filepath.Join(t.TempDir(), "raw.flv")
+	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000", "-t", "0.3", "-c:a", "aac", "-f", "flv", source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create synthetic FLV: %v: %s", err, out)
+	}
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := state.Defaults()
+	cfg.FFmpegPath = path
+	processed, err := Process(ctx, source, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(before) != sha256.Sum256(after) || processed == source || filepath.Ext(processed) != ".mkv" {
+		t.Fatal("post-processing modified its raw input")
+	}
+	if info, err := os.Stat(processed); err != nil || info.Size() == 0 {
+		t.Fatal("processed copy missing", err)
 	}
 }
