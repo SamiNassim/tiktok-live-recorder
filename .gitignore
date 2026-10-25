@@ -30,6 +30,7 @@ cookies.txt
 
 # Personal recordings and network captures.
 *.mkv
+*.flv
 *.mp4
 *.ts
 *.har

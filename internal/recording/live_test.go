@@ -1,0 +1,89 @@
+package recording
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"tiktok-live-recorder/internal/state"
+)
+
+func TestRawRecordingIsUnmodifiedAndNeedsNoFFmpeg(t *testing.T) {
+	cfg := state.Defaults()
+	cfg.RecordingPath = t.TempDir()
+	cfg.FFmpegPath = filepath.Join(t.TempDir(), "not-installed")
+	raw := append([]byte{'F', 'L', 'V', 1, 5, 0, 0, 0, 9, 0, 0, 0, 0}, bytes.Repeat([]byte{1, 2, 3, 4}, 10000)...)
+	ctx, cancel := context.WithCancel(context.Background())
+	h, err := start(context.Background(), ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, io.NopCloser(bytes.NewReader(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := h.Result()
+	got, err := os.ReadFile(r.Path)
+	if err != nil || r.Err != nil || !bytes.Equal(got, raw) || filepath.Ext(r.Path) != ".flv" || r.Bytes != int64(len(raw)) {
+		t.Fatal("raw recording changed", r, err)
+	}
+}
+
+func TestPauseClosesStalledMediaAndKeepsPartialFile(t *testing.T) {
+	cfg := state.Defaults()
+	cfg.RecordingPath = t.TempDir()
+	reader, writer := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	h, err := start(context.Background(), ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.Write([]byte("preserve this partial stream")); err != nil {
+		t.Fatal(err)
+	}
+	h.Stop()
+	select {
+	case <-h.Done():
+	case <-time.After(time.Second):
+		t.Fatal("pause did not unblock media")
+	}
+	r := h.Result()
+	if r.Err != nil || r.Bytes == 0 {
+		t.Fatal(r)
+	}
+	got, err := os.ReadFile(r.Path)
+	if err != nil || string(got) != "preserve this partial stream" {
+		t.Fatal(string(got), err)
+	}
+	writer.Close()
+}
+
+func TestOutputOptionsCannotReplaceInputOrCreateExtraOutput(t *testing.T) {
+	for _, raw := range []string{`-i other.flv -c copy`, `-c copy alternate.mp4`, `ffmpeg -c copy`, `-c copy {output}`, `-filter_complex_script script.txt`, `-vf "movie=other.mp4"`, `-y`, `-c "unfinished`} {
+		if _, err := OutputArgs(raw); err == nil {
+			t.Fatal("accepted", raw)
+		}
+	}
+	got, err := OutputArgs(`-map 0:v? -map 0:a? -c copy -metadata title="Processed copy" -movflags +faststart`)
+	if err != nil || !slices.Contains(got, "title=Processed copy") {
+		t.Fatal(got, err)
+	}
+}
+
+func TestFailedProcessingNeverRemovesRaw(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "raw.flv")
+	raw := []byte("original FLV")
+	if err := os.WriteFile(source, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := state.Defaults()
+	cfg.FFmpegPath = filepath.Join(t.TempDir(), "missing")
+	if _, err := Process(context.Background(), source, cfg); err == nil {
+		t.Fatal("processing unexpectedly succeeded")
+	}
+	got, err := os.ReadFile(source)
+	if err != nil || !bytes.Equal(got, raw) {
+		t.Fatal("raw file lost", err)
+	}
+}
