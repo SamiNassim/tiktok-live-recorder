@@ -22,7 +22,7 @@ func TestRawRecordingIsUnmodifiedAndNeedsNoFFmpeg(t *testing.T) {
 	cfg.FFmpegPath = filepath.Join(t.TempDir(), "not-installed")
 	raw := append([]byte{'F', 'L', 'V', 1, 5, 0, 0, 0, 9, 0, 0, 0, 0}, bytes.Repeat([]byte{1, 2, 3, 4}, 10000)...)
 	ctx, cancel := context.WithCancel(context.Background())
-	h, err := start(context.Background(), ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, io.NopCloser(bytes.NewReader(raw)))
+	h, err := start(ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, io.NopCloser(bytes.NewReader(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestPauseClosesStalledMediaAndKeepsPartialFile(t *testing.T) {
 	cfg.RecordingPath = t.TempDir()
 	reader, writer := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
-	h, err := start(context.Background(), ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, reader)
+	h, err := start(ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, reader)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,10 +20,10 @@ import (
 )
 
 type Result struct {
-	Path, ProcessedPath string
-	Bytes               int64
-	EndedAt             time.Time
-	Err                 error
+	Path    string
+	Bytes   int64
+	EndedAt time.Time
+	Err     error
 }
 type Handle struct {
 	path    string
@@ -46,7 +46,7 @@ func Start(parent context.Context, s state.Streamer, source tiktok.Stream, cfg s
 		cancel()
 		return nil, err
 	}
-	h, err := start(parent, ctx, cancel, s, cfg, body)
+	h, err := start(ctx, cancel, s, cfg, body)
 	if err != nil {
 		body.Close()
 		cancel()
@@ -54,7 +54,7 @@ func Start(parent context.Context, s state.Streamer, source tiktok.Stream, cfg s
 	return h, err
 }
 
-func start(parent, ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg state.Config, body io.ReadCloser) (*Handle, error) {
+func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg state.Config, body io.ReadCloser) (*Handle, error) {
 	dir := cfg.RecordingPath
 	if cfg.FolderPerStreamer {
 		dir = filepath.Join(dir, safeName(s.DisplayName())+"_"+safeName(s.ID))
@@ -90,12 +90,6 @@ func start(parent, ctx context.Context, cancel context.CancelFunc, s state.Strea
 			err = errors.New("no FLV bytes were received")
 		}
 		r := Result{Path: path, Bytes: count, EndedAt: time.Now(), Err: err}
-		if cfg.PostProcess && count > 13 && err == nil && parent.Err() == nil {
-			r.ProcessedPath, err = Process(parent, path, cfg)
-			if err != nil {
-				r.Err = err
-			}
-		}
 		h.result = r
 	}()
 	return h, nil

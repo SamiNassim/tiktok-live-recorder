@@ -49,19 +49,22 @@ type item struct {
 	handle       activeRecording
 	recordCancel context.CancelFunc
 	failures     int
+	config       state.Config
 }
 type Engine struct {
-	store  *state.Store
-	log    *logging.Log
-	client streamClient
-	start  startRecording
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	items  map[string]*item
-	wake   chan struct{}
-	events chan Event
-	wg     sync.WaitGroup
+	store      *state.Store
+	log        *logging.Log
+	client     streamClient
+	start      startRecording
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	items      map[string]*item
+	wake       chan struct{}
+	events     chan Event
+	wg         sync.WaitGroup
+	processing chan struct{}
+	process    func(context.Context, string, state.Config) (string, error)
 }
 
 func New(store *state.Store, log *logging.Log) *Engine {
@@ -71,7 +74,7 @@ func New(store *state.Store, log *logging.Log) *Engine {
 }
 func newEngine(store *state.Store, log *logging.Log, client streamClient, start startRecording) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64)}
+	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64), processing: make(chan struct{}, 2), process: recording.Process}
 	e.recoverHistory()
 	e.configure(store.Config())
 	e.wg.Add(1)
@@ -453,6 +456,7 @@ func (e *Engine) check(id string) {
 		return
 	}
 	it.handle = h
+	it.config = cfg
 	it.row.Status = "Recording"
 	it.row.StartedAt = h.Started()
 	it.row.Path = h.File()
@@ -491,7 +495,6 @@ func (e *Engine) completed(it *item) {
 			if d.Recordings[i].Path == initial {
 				d.Recordings[i].EndedAt = r.EndedAt
 				d.Recordings[i].Bytes = r.Bytes
-				d.Recordings[i].ProcessedPath = r.ProcessedPath
 				if r.Err != nil {
 					d.Recordings[i].Error = r.Err.Error()
 				}
@@ -502,6 +505,9 @@ func (e *Engine) completed(it *item) {
 		e.log.Write("WARN", it.row.Streamer.ID, "Recording ended; raw file kept: "+r.Err.Error())
 	} else {
 		e.log.Write("INFO", it.row.Streamer.ID, fmt.Sprintf("Raw FLV finalized (%d bytes)", r.Bytes))
+	}
+	if it.config.PostProcess && r.Err == nil && r.Bytes > 13 && e.ctx.Err() == nil {
+		e.processCopy(it.row.Streamer.ID, initial, it.config)
 	}
 	if it.recordCancel != nil {
 		it.recordCancel()

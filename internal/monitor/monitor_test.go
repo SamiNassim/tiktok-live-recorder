@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -239,4 +240,44 @@ func TestQueueCalculator(t *testing.T) {
 	if normal != 200*time.Second || cold != 300*time.Second {
 		t.Fatal(normal, cold)
 	}
+}
+
+func TestProcessingNeverBlocksNextRecordingOrShutdown(t *testing.T) {
+	s, l := fixture(t)
+	cfg := s.Config()
+	cfg.PostProcess = true
+	if err := s.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeClient{}
+	c.live.Store(true)
+	var starts atomic.Int32
+	root := t.TempDir()
+	e := newEngine(s, l, c, func(context.Context, state.Streamer, tiktok.Stream, state.Config) (activeRecording, error) {
+		return &fakeRecording{done: make(chan struct{}), started: time.Now(), path: filepath.Join(root, fmt.Sprintf("raw-%d.flv", starts.Add(1)))}, nil
+	})
+	waitFor(t, func() bool { return e.Snapshot().Recording == 1 })
+	processing := make(chan struct{}, 1)
+	e.mu.Lock()
+	e.process = func(ctx context.Context, path string, cfg state.Config) (string, error) {
+		processing <- struct{}{}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	e.items["demo_creator"].handle.Stop()
+	e.mu.Unlock()
+	e.wakeUp()
+	select {
+	case <-processing:
+	case <-time.After(10 * time.Second):
+		e.Close()
+		t.Fatal("processing did not start")
+	}
+	waitFor(t, func() bool { return e.Snapshot().Recording == 0 })
+	due(e)
+	waitFor(t, func() bool { return e.Snapshot().Recording == 1 })
+	if starts.Load() != 2 {
+		t.Fatal("new recording was blocked by processing")
+	}
+	e.Close()
 }
