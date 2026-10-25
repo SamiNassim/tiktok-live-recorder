@@ -95,6 +95,9 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return ErrAccess
 	case http.StatusTooManyRequests:
+		c.mu.Lock()
+		c.next = maxTime(c.next, time.Now().Add(5*time.Minute))
+		c.mu.Unlock()
 		return ErrRateLimited
 	case http.StatusOK:
 	default:
