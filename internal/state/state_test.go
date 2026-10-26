@@ -20,6 +20,9 @@ func TestDefaultsAndRoundTrip(t *testing.T) {
 	if !c.PostProcess || c.OutputExtension != "mkv" || c.FFmpegArgs != "-map 0:v? -map 0:a? -c copy" {
 		t.Fatal("new installations must create lossless MKV playback copies")
 	}
+	if c.DeleteRawAfterProcessing {
+		t.Fatal("new installations must keep original FLV files")
+	}
 	c.Cookie = "temporary-cookie"
 	if err = s.SaveConfig(c); err != nil {
 		t.Fatal(err)
@@ -38,6 +41,30 @@ func TestDefaultsAndRoundTrip(t *testing.T) {
 	d.Streamers[0].ID = "mutated"
 	if r.Data().Streamers[0].ID != "alice" {
 		t.Fatal("snapshot aliases state")
+	}
+}
+
+func TestDisablingProcessingClearsRawCleanup(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := s.Config()
+	cfg.DeleteRawAfterProcessing = true
+	if err := s.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(s.Directory())
+	if err != nil || !reopened.Config().DeleteRawAfterProcessing {
+		t.Fatal("explicit cleanup preference was not saved", err)
+	}
+	cfg.PostProcess = false
+	if err := reopened.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = Open(s.Directory())
+	if err != nil || reopened.Config().PostProcess || reopened.Config().DeleteRawAfterProcessing {
+		t.Fatal("cleanup remained enabled without processing", err)
 	}
 }
 

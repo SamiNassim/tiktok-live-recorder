@@ -13,21 +13,22 @@ import (
 )
 
 type Config struct {
-	Window              Window `json:"window"`
-	Theme               string `json:"theme"`
-	RecordingPath       string `json:"recording_path"`
-	FFmpegPath          string `json:"ffmpeg_path,omitempty"`
-	Cookie              string `json:"tiktok_cookies,omitempty"`
-	PollingEnabled      bool   `json:"polling_enabled"`
-	PollSeconds         int    `json:"poll_seconds"`
-	ColdSeconds         int    `json:"cold_seconds"`
-	RequestDelaySeconds int    `json:"request_delay_seconds"`
-	AutoPromote         bool   `json:"auto_promote"`
-	Notifications       bool   `json:"notifications"`
-	FolderPerStreamer   bool   `json:"folder_per_streamer"`
-	PostProcess         bool   `json:"post_process"`
-	FFmpegArgs          string `json:"ffmpeg_args"`
-	OutputExtension     string `json:"output_extension"`
+	Window                   Window `json:"window"`
+	Theme                    string `json:"theme"`
+	RecordingPath            string `json:"recording_path"`
+	FFmpegPath               string `json:"ffmpeg_path,omitempty"`
+	Cookie                   string `json:"tiktok_cookies,omitempty"`
+	PollingEnabled           bool   `json:"polling_enabled"`
+	PollSeconds              int    `json:"poll_seconds"`
+	ColdSeconds              int    `json:"cold_seconds"`
+	RequestDelaySeconds      int    `json:"request_delay_seconds"`
+	AutoPromote              bool   `json:"auto_promote"`
+	Notifications            bool   `json:"notifications"`
+	FolderPerStreamer        bool   `json:"folder_per_streamer"`
+	PostProcess              bool   `json:"post_process"`
+	DeleteRawAfterProcessing bool   `json:"delete_raw_after_processing"`
+	FFmpegArgs               string `json:"ffmpeg_args"`
+	OutputExtension          string `json:"output_extension"`
 }
 
 type Window struct {
@@ -71,6 +72,7 @@ type Recording struct {
 	Bytes         int64     `json:"bytes"`
 	Error         string    `json:"error,omitempty"`
 	ProcessedPath string    `json:"processed_path,omitempty"`
+	RawDeleted    bool      `json:"raw_deleted,omitempty"`
 }
 
 type Data struct {
@@ -152,6 +154,9 @@ func Open(dir string) (*Store, error) {
 	if s.data.Version != 1 {
 		return nil, fmt.Errorf("unsupported data.json version %d", s.data.Version)
 	}
+	if !s.config.PostProcess {
+		s.config.DeleteRawAfterProcessing = false
+	}
 	return s, nil
 }
 
@@ -174,6 +179,9 @@ func clone(d Data) Data {
 	return d
 }
 func (s *Store) SaveConfig(c Config) error {
+	if !c.PostProcess {
+		c.DeleteRawAfterProcessing = false
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}

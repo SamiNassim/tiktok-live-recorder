@@ -56,21 +56,32 @@ func (s *Store) PruneMissingRecordings() (int, error) {
 		available[path] = ok
 		return ok
 	}
-	missing := make(map[string]string)
+	type recordingPaths struct{ raw, processed string }
+	missing := make(map[string]recordingPaths)
 	for _, r := range data.Recordings {
 		if r.EndedAt.IsZero() || r.Path == "" {
 			continue
 		}
-		if _, err := os.Stat(r.Path); !errors.Is(err, os.ErrNotExist) {
-			continue
+		allMissing := true
+		for _, path := range []string{r.Path, r.ProcessedPath} {
+			if path == "" {
+				continue
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				allMissing = false
+				break
+			}
+			// Require an available parent or recording root before treating a
+			// missing path as deleted, rather than on a disconnected drive.
+			rel, err := filepath.Rel(root, path)
+			underRoot := err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+			if !directoryAvailable(filepath.Dir(path)) && !(underRoot && directoryAvailable(root)) {
+				allMissing = false
+				break
+			}
 		}
-		// A missing per-streamer directory is a deletion only when its known
-		// recording root is still mounted. Older recording roots need their
-		// immediate parent to be available before they can be reconciled.
-		rel, err := filepath.Rel(root, r.Path)
-		underRoot := err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
-		if directoryAvailable(filepath.Dir(r.Path)) || underRoot && directoryAvailable(root) {
-			missing[r.ID] = r.Path
+		if allMissing {
+			missing[r.ID] = recordingPaths{r.Path, r.ProcessedPath}
 		}
 	}
 	if len(missing) == 0 {
@@ -80,7 +91,8 @@ func (s *Store) PruneMissingRecordings() (int, error) {
 	err := s.Update(func(d *Data) error {
 		before := len(d.Recordings)
 		d.Recordings = slices.DeleteFunc(d.Recordings, func(r Recording) bool {
-			return !r.EndedAt.IsZero() && missing[r.ID] == r.Path && r.Path != ""
+			paths, ok := missing[r.ID]
+			return ok && !r.EndedAt.IsZero() && paths == (recordingPaths{r.Path, r.ProcessedPath})
 		})
 		removed = before - len(d.Recordings)
 		return nil

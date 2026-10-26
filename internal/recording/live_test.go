@@ -100,7 +100,7 @@ func TestEarlyHTTPClosureKeepsRawBytesAndClassifiesTransportEnd(t *testing.T) {
 }
 
 func TestOutputOptionsCannotReplaceInputOrCreateExtraOutput(t *testing.T) {
-	for _, raw := range []string{`-i other.flv -c copy`, `-c copy alternate.mp4`, `ffmpeg -c copy`, `-c copy {output}`, `-filter_complex_script script.txt`, `-vf "movie=other.mp4"`, `-y`, `-c "unfinished`} {
+	for _, raw := range []string{`-i other.flv -c copy`, `-c copy alternate.mp4`, `ffmpeg -c copy`, `-c copy {output}`, `-filter_complex_script script.txt`, `-vf "movie=other.mp4"`, `-f hls`, `-f dash`, `-f segment`, `-f ffmetadata`, `-y`, `-c "unfinished`} {
 		if _, err := OutputArgs(raw); err == nil {
 			t.Fatal("accepted", raw)
 		}
@@ -108,6 +108,11 @@ func TestOutputOptionsCannotReplaceInputOrCreateExtraOutput(t *testing.T) {
 	got, err := OutputArgs(`-map 0:v? -map 0:a? -c copy -metadata title="Processed copy" -movflags +faststart`)
 	if err != nil || !slices.Contains(got, "title=Processed copy") {
 		t.Fatal(got, err)
+	}
+	for _, format := range []string{"matroska", "mp4", "mpegts"} {
+		if _, err := OutputArgs("-c copy -f " + format); err != nil {
+			t.Fatal("supported single-file format rejected", format, err)
+		}
 	}
 }
 
@@ -118,6 +123,7 @@ func TestFailedProcessingNeverRemovesRaw(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := state.Defaults()
+	cfg.DeleteRawAfterProcessing = true
 	cfg.FFmpegPath = filepath.Join(t.TempDir(), "missing")
 	if _, err := Process(context.Background(), source, cfg); err == nil {
 		t.Fatal("processing unexpectedly succeeded")
@@ -146,6 +152,7 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 	}
 	cfg := state.Defaults()
 	cfg.FFmpegPath = path
+	cfg.DeleteRawAfterProcessing = true // Verification still leaves removal to saved history.
 	processed, err := Process(ctx, source, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +202,33 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 		}
 		if start, duration := timing(processed); start < 0 || start > 0.1 || duration < 0.2 || duration > 1 {
 			t.Fatal("MKV retained the inflated live timeline", start, duration)
+		}
+	})
+	t.Run("existing copy is never overwritten", func(t *testing.T) {
+		beforeCopy, err := os.ReadFile(processed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Process(ctx, source, cfg); err == nil {
+			t.Fatal("processing overwrote an existing copy")
+		}
+		afterCopy, err := os.ReadFile(processed)
+		if err != nil || !bytes.Equal(beforeCopy, afterCopy) {
+			t.Fatal("existing copy changed", err)
+		}
+	})
+	t.Run("unsupported output keeps the original", func(t *testing.T) {
+		input := filepath.Join(t.TempDir(), "source.flv")
+		if err := os.WriteFile(input, before, 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg.FFmpegArgs = "-f ffmetadata"
+		if _, err := Process(ctx, input, cfg); err == nil {
+			t.Fatal("output without media streams passed cleanup verification")
+		}
+		got, err := os.ReadFile(input)
+		if err != nil || !bytes.Equal(got, before) {
+			t.Fatal("invalid output lost the original", err)
 		}
 	})
 }
