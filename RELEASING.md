@@ -32,3 +32,18 @@ Windows releases do not include an installer or ZIP.
 The notes include commit messages and descriptions since the previous release.
 You can edit them in the draft. Builds use no Apple or Windows publisher
 certificates; first-launch instructions are in the [README](README.md#download-and-open).
+
+## If you change your mind
+
+If only the notes need changing, edit the draft directly.
+
+For a code change or an abandoned release:
+
+1. If the **Release** workflow is still running, cancel it under **Actions** and wait for it to stop.
+2. Delete the draft under **Releases**.
+3. If needed, fix the code and commit normally. To undo a commit, use `git revert <commit>`.
+4. When ready, run the release commands again with a new version, such as `v0.1.1`.
+
+Keep the old tag unchanged and do not rerun its workflow. Deleting a draft does
+not undo pushed commits: in a public repository, the pushed source is already
+visible. The draft controls publication of the release downloads.
