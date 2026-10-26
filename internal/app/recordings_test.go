@@ -93,6 +93,20 @@ func TestRecordingMenusCoverFullRowAndCopyPath(t *testing.T) {
 	if tt.Clipboard() != path {
 		t.Fatal("copied the wrong original path")
 	}
+	a.data.Recordings[0].RawDeleted = true
+	tt.Frame()
+	tt.RightClickAt(file.X, label.Y+label.H/2)
+	for _, action := range []string{"Open original FLV", "Show original FLV in folder", "Copy original FLV path"} {
+		if err := tt.ChooseMenuItem(action); err == nil {
+			t.Fatal("deleted original still has an enabled action", action)
+		}
+	}
+	if err := tt.ChooseMenuItem("Copy file path"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.Clipboard() != processed {
+		t.Fatal("raw cleanup disabled the surviving playback copy")
+	}
 	label, _ = tt.Find("Raw Demo")
 	tt.RightClickAt(file.X, label.Y+label.H/2)
 	if slices.Contains(tt.Menu(), "Open original FLV") {

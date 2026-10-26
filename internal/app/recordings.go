@@ -28,13 +28,13 @@ func (a *application) recordingMenu(m *ui.Menu, r state.Recording, services ui.S
 	}
 	if r.ProcessedPath != "" {
 		m.Separator()
-		if m.Item("Open original FLV").Disabled(a.busy || r.Path == "" || r.EndedAt.IsZero()).Chosen() {
+		if m.Item("Open original FLV").Disabled(a.busy || r.RawDeleted || r.Path == "" || r.EndedAt.IsZero()).Chosen() {
 			a.work(func() error { return mygo.Shell.OpenPath(r.Path) })
 		}
-		if m.Item("Show original FLV in folder").Disabled(r.Path == "").Chosen() {
+		if m.Item("Show original FLV in folder").Disabled(r.RawDeleted || r.Path == "").Chosen() {
 			a.reveal(r.Path)
 		}
-		if m.Item("Copy original FLV path").Disabled(r.Path == "").Chosen() {
+		if m.Item("Copy original FLV path").Disabled(r.RawDeleted || r.Path == "").Chosen() {
 			services.WriteClipboard(r.Path)
 		}
 	}
