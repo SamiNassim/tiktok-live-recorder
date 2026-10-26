@@ -20,6 +20,9 @@ Use `v0.1.0` for the first release, then increase the version, for example
 `v0.1.1`. The first command updates the app version and creates a local tag.
 The push starts GitHub's tests and builds for Mac, Windows, and Linux.
 
+Downloads are a DMG for Mac, a portable `.exe` for Windows, and Linux packages.
+Windows releases do not include an installer or ZIP.
+
 ## Review and publish
 
 1. On GitHub, open the repository's **Actions** tab and wait for **Release** to succeed.

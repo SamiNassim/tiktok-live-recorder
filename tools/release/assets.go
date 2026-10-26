@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -37,10 +36,7 @@ func packageAssets(root string, c config, platform, output string) error {
 		if arch == "universal" {
 			return errors.New("Windows requires a concrete processor architecture")
 		}
-		if err := copyAsset(c.Name+" Setup "+c.Version+" "+arch+".exe", "windows-"+arch+"-setup.exe"); err != nil {
-			return err
-		}
-		return portableZIP(dir, filepath.Join(output, prefix+"-windows-"+arch+"-portable.zip"), []string{c.Name + ".exe", "CREDITS.md", "LICENSE"})
+		return copyAsset(c.Name+".exe", "windows-"+arch+".exe")
 	case "linux":
 		if arch == "universal" {
 			return errors.New("Linux requires a concrete processor architecture")
@@ -70,33 +66,6 @@ func copyFile(source, target string) error {
 	}
 	_, err = io.Copy(out, in)
 	return errors.Join(err, out.Close())
-}
-
-func portableZIP(dir, target string, names []string) error {
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	w := zip.NewWriter(f)
-	for _, name := range names {
-		in, err := os.Open(filepath.Join(dir, name))
-		if err != nil {
-			w.Close()
-			f.Close()
-			return err
-		}
-		entry, err := w.Create(name)
-		if err == nil {
-			_, err = io.Copy(entry, in)
-		}
-		in.Close()
-		if err != nil {
-			w.Close()
-			f.Close()
-			return err
-		}
-	}
-	return errors.Join(w.Close(), f.Close())
 }
 
 func checksums(dir string) error {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -120,7 +119,7 @@ func TestNotesUseDirectCommitsAndBodiesSincePreviousRelease(t *testing.T) {
 	}
 }
 
-func TestPortableAssetsExcludeLocalFilesAndIncludeResources(t *testing.T) {
+func TestWindowsReleaseContainsOnlyThePortableExecutable(t *testing.T) {
 	root, c := testRepository(t)
 	dir := filepath.Join(root, c.Out, "windows-amd64")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -135,23 +134,25 @@ func TestPortableAssetsExcludeLocalFilesAndIncludeResources(t *testing.T) {
 	if err := packageAssets(root, c, "windows/amd64", out); err != nil {
 		t.Fatal(err)
 	}
-	z, err := zip.OpenReader(filepath.Join(out, "demo-recorder-0.1.0-windows-amd64-portable.zip"))
+	entries, err := os.ReadDir(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer z.Close()
 	var names []string
-	for _, f := range z.File {
-		names = append(names, f.Name)
+	for _, entry := range entries {
+		names = append(names, entry.Name())
 	}
-	if !slices.Equal(names, []string{c.Name + ".exe", "CREDITS.md", "LICENSE"}) {
-		t.Fatal("portable package included unexpected files", names)
+	if !slices.Equal(names, []string{"demo-recorder-0.1.0-windows-amd64.exe"}) {
+		t.Fatal("Windows release included an installer, archive, or unrelated file", names)
+	}
+	if b, err := os.ReadFile(filepath.Join(out, names[0])); err != nil || string(b) != "synthetic fixture" {
+		t.Fatal("portable executable was not copied correctly", err)
 	}
 	if err := checksums(out); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(out, "SHA256SUMS.txt"))
-	if err != nil || len(strings.Split(strings.TrimSpace(string(b)), "\n")) != 2 || strings.Contains(string(b), "SHA256SUMS.txt") {
+	if err != nil || len(strings.Split(strings.TrimSpace(string(b)), "\n")) != 1 || strings.Contains(string(b), "SHA256SUMS.txt") {
 		t.Fatal("checksum list is incomplete or hashes itself", err)
 	}
 }
