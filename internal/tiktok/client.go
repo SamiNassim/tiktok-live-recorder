@@ -16,7 +16,7 @@ var (
 	ErrNotFound       = errors.New("TikTok account was not found or has never hosted a live")
 	ErrAccess         = errors.New("TikTok requires a valid account or permission to watch this live")
 	ErrUnavailable    = errors.New("streamer is live, but TikTok withheld playback URLs; check the saved session, account permissions, or regional restrictions")
-	ErrBlocked        = errors.New("TikTok returned an unexpected response; access may be temporarily limited")
+	ErrBlocked        = errors.New("TikTok returned an unexpected response; this check could not be completed")
 	ErrRateLimited    = errors.New("TikTok rate limited this connection; checks will back off")
 	ErrSessionExpired = errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh sessionid value")
 )
@@ -150,6 +150,9 @@ func (c *Client) Check(ctx context.Context, username string) (Stream, error) {
 		var secondary Stream
 		secondary, secondErr = info.stream()
 		if secondErr == nil {
+			if !secondary.Live && (primary.Live || errors.Is(err, ErrAccess)) {
+				return primary, err
+			}
 			return secondary, nil
 		}
 		if secondary.Live {

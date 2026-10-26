@@ -2,10 +2,18 @@ package tiktok
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+)
+
+const (
+	roomStatusLive     = 2
+	roomStatusInactive = 3
+	roomStatusEnded    = 4
+	roomFinishedCode   = 30003
 )
 
 type pullData struct {
@@ -47,11 +55,11 @@ func (r webResponse) stream() (Stream, error) {
 	if status == nil {
 		return s, ErrBlocked
 	}
-	if *status == 4 {
+	if *status == roomStatusInactive || *status == roomStatusEnded {
 		return s, nil
 	}
-	if *status != 2 {
-		return s, ErrBlocked
+	if *status != roomStatusLive {
+		return s, fmt.Errorf("%w (room status %d)", ErrBlocked, *status)
 	}
 	s.Live = true
 	s.Sources = append(parseSDK(r.Data.Room.Data.Pull.Data), parseSDK(r.Data.Room.HEVC.Pull.Data)...)
@@ -86,6 +94,9 @@ func (r roomResponse) stream() (Stream, error) {
 	if r.Status == nil {
 		return Stream{}, ErrBlocked
 	}
+	if *r.Status == roomFinishedCode {
+		return Stream{}, nil
+	}
 	if *r.Status != 0 {
 		return Stream{}, statusError(*r.Status)
 	}
@@ -99,11 +110,11 @@ func (r roomResponse) stream() (Stream, error) {
 		}
 		return s, ErrBlocked
 	}
-	if *r.Data.Status == 4 {
+	if *r.Data.Status == roomStatusInactive || *r.Data.Status == roomStatusEnded {
 		return s, nil
 	}
-	if *r.Data.Status != 2 {
-		return s, ErrBlocked
+	if *r.Data.Status != roomStatusLive {
+		return s, fmt.Errorf("%w (room status %d)", ErrBlocked, *r.Data.Status)
 	}
 	s.Live = true
 	s.Sources = parseSDK(r.Data.URL.SDK.Pull.Data)
@@ -132,7 +143,7 @@ func statusError(code int) error {
 	case 4003110, 20003, 8:
 		return ErrAccess
 	default:
-		return ErrBlocked
+		return fmt.Errorf("%w (API code %d)", ErrBlocked, code)
 	}
 }
 
