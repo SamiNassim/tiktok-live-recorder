@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -60,6 +61,40 @@ func TestPauseClosesStalledMediaAndKeepsPartialFile(t *testing.T) {
 		t.Fatal(string(got), err)
 	}
 	writer.Close()
+}
+
+type interruptedBody struct {
+	reader *bytes.Reader
+	err    error
+}
+
+func (b interruptedBody) Read(p []byte) (int, error) {
+	if b.reader.Len() == 0 {
+		return 0, b.err
+	}
+	return b.reader.Read(p)
+}
+func (b interruptedBody) Close() error { return nil }
+
+func TestEarlyHTTPClosureKeepsRawBytesAndClassifiesTransportEnd(t *testing.T) {
+	for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read timeout")} {
+		cfg := state.Defaults()
+		cfg.RecordingPath = t.TempDir()
+		raw := []byte("original video payload")
+		ctx, cancel := context.WithCancel(context.Background())
+		h, err := start(ctx, cancel, state.Streamer{ID: "demo_creator"}, cfg, interruptedBody{bytes.NewReader(raw), cause})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := h.Result()
+		if r.TransportEnded != errors.Is(cause, io.ErrUnexpectedEOF) || !errors.Is(r.Err, cause) || r.Bytes != int64(len(raw)) {
+			t.Fatal("transport closure was not classified correctly", r)
+		}
+		got, err := os.ReadFile(r.Path)
+		if err != nil || !bytes.Equal(got, raw) {
+			t.Fatal("raw bytes changed", err)
+		}
+	}
 }
 
 func TestOutputOptionsCannotReplaceInputOrCreateExtraOutput(t *testing.T) {

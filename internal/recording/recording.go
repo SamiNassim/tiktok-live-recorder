@@ -24,6 +24,8 @@ type Result struct {
 	Bytes   int64
 	EndedAt time.Time
 	Err     error
+	// TransportEnded distinguishes an HTTP body closing early from disk errors.
+	TransportEnded bool
 }
 type Handle struct {
 	path    string
@@ -55,19 +57,15 @@ func Start(parent context.Context, s state.Streamer, source tiktok.Stream, cfg s
 }
 
 func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg state.Config, body io.ReadCloser) (*Handle, error) {
-	dir := cfg.RecordingPath
-	if cfg.FolderPerStreamer {
-		dir = filepath.Join(dir, safeName(s.DisplayName())+"_"+safeName(s.ID))
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create recording folder: %w", err)
-	}
 	stamp := time.Now()
 	var suffix [4]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, safeName(s.DisplayName())+"_"+stamp.Format("2006-01-02_15-04-05")+"_"+hex.EncodeToString(suffix[:])+".flv")
+	path := recordingPath(s, cfg, stamp, hex.EncodeToString(suffix[:]))
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("create recording folder: %w", err)
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("create raw FLV: %w", err)
@@ -85,14 +83,25 @@ func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg
 		if ctx.Err() != nil && !writer.failed {
 			copyErr = nil
 		}
-		err := errors.Join(copyErr, file.Sync(), file.Close())
+		syncErr, closeErr := file.Sync(), file.Close()
+		transportEnded := count > 0 && errors.Is(copyErr, io.ErrUnexpectedEOF) && !writer.failed && syncErr == nil && closeErr == nil
+		err := errors.Join(copyErr, syncErr, closeErr)
 		if count == 0 && err == nil {
 			err = errors.New("no FLV bytes were received")
 		}
-		r := Result{Path: path, Bytes: count, EndedAt: time.Now(), Err: err}
+		r := Result{Path: path, Bytes: count, EndedAt: time.Now(), Err: err, TransportEnded: transportEnded}
 		h.result = r
 	}()
 	return h, nil
+}
+
+func recordingPath(s state.Streamer, cfg state.Config, stamp time.Time, suffix string) string {
+	id := safeName("@" + strings.TrimPrefix(s.ID, "@"))
+	dir := cfg.RecordingPath
+	if cfg.FolderPerStreamer {
+		dir = filepath.Join(dir, id+"_"+safeName(s.DisplayName()))
+	}
+	return filepath.Join(dir, id+"_"+stamp.Format("2006-01-02_15-04-05")+"_"+suffix+".flv")
 }
 
 type syncWriter struct {

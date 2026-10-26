@@ -501,12 +501,14 @@ func (e *Engine) completed(it *item) {
 			}
 		}
 	})
-	if r.Err != nil {
+	if r.TransportEnded {
+		e.log.Write("INFO", it.row.Streamer.ID, "Media connection ended; raw file saved.")
+	} else if r.Err != nil {
 		e.log.Write("WARN", it.row.Streamer.ID, "Recording ended; raw file kept: "+r.Err.Error())
 	} else {
 		e.log.Write("INFO", it.row.Streamer.ID, fmt.Sprintf("Raw FLV finalized (%d bytes)", r.Bytes))
 	}
-	if it.config.PostProcess && r.Err == nil && r.Bytes > 13 && e.ctx.Err() == nil {
+	if it.config.PostProcess && (r.Err == nil || r.TransportEnded) && r.Bytes > 13 && e.ctx.Err() == nil {
 		e.processCopy(it.row.Streamer.ID, initial, it.config)
 	}
 	if it.recordCancel != nil {
