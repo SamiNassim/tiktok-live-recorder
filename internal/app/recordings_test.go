@@ -53,11 +53,16 @@ func TestRecordingMenusCoverFullRowAndCopyPath(t *testing.T) {
 	now := time.Now()
 	path := filepath.Join(t.TempDir(), "demo.flv")
 	processed := filepath.Join(t.TempDir(), "demo.mkv")
+	rawOnly := filepath.Join(t.TempDir(), "raw-only.flv")
 	a.data.Recordings = []state.Recording{
 		{ID: "done", Name: "Completed Demo", Path: path, ProcessedPath: processed, StartedAt: now.Add(-time.Hour), EndedAt: now, Bytes: 1024},
 		{ID: "live", Name: "Active Demo", Path: filepath.Join(t.TempDir(), "active.flv"), StartedAt: now},
+		{ID: "raw", Name: "Raw Demo", Path: rawOnly, StartedAt: now.Add(-2 * time.Hour), EndedAt: now, Bytes: 1024},
 	}
 	tt := ui.NewTester(a.view, 1400, 900)
+	if !tt.HasText("demo.mkv") || tt.HasText("demo.flv") {
+		t.Fatal("completed playback copy is not the primary file in history")
+	}
 	left, _ := tt.Find("Streamer")
 	file, _ := tt.Find("File")
 	label, _ := tt.Find("Completed Demo")
@@ -75,23 +80,34 @@ func TestRecordingMenusCoverFullRowAndCopyPath(t *testing.T) {
 	if err := tt.ChooseMenuItem("Copy file path"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Clipboard() != path {
-		t.Fatal("copied the wrong recording path", tt.Clipboard())
+	if tt.Clipboard() != processed {
+		t.Fatal("primary action did not prefer the playback copy", tt.Clipboard())
 	}
 	tt.RightClickAt(file.X, label.Y+label.H/2)
-	if !slices.Contains(tt.Menu(), "Open processed copy") || !slices.Contains(tt.Menu(), "Show processed copy in folder") {
-		t.Fatal("processed copy menu missing", tt.Menu())
+	if !slices.Contains(tt.Menu(), "Open original FLV") || !slices.Contains(tt.Menu(), "Show original FLV in folder") {
+		t.Fatal("original FLV menu missing", tt.Menu())
 	}
-	if err := tt.ChooseMenuItem("Copy processed file path"); err != nil {
+	if err := tt.ChooseMenuItem("Copy original FLV path"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.Clipboard() != processed {
-		t.Fatal("copied the wrong processed path")
+	if tt.Clipboard() != path {
+		t.Fatal("copied the wrong original path")
+	}
+	label, _ = tt.Find("Raw Demo")
+	tt.RightClickAt(file.X, label.Y+label.H/2)
+	if slices.Contains(tt.Menu(), "Open original FLV") {
+		t.Fatal("duplicate raw actions shown without a playback copy")
+	}
+	if err := tt.ChooseMenuItem("Copy file path"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.Clipboard() != rawOnly {
+		t.Fatal("raw recording is not the fallback while a copy is unavailable")
 	}
 	label, _ = tt.Find("Active Demo")
 	tt.RightClickAt(file.X, label.Y+label.H/2)
-	if slices.Contains(tt.Menu(), "Open processed copy") {
-		t.Fatal("processed copy menu shown without a processed file")
+	if slices.Contains(tt.Menu(), "Open original FLV") {
+		t.Fatal("duplicate raw actions shown for an active recording")
 	}
 	for _, action := range []string{"Open recording", "Remove from history"} {
 		if err := tt.ChooseMenuItem(action); err == nil {

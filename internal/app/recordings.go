@@ -8,26 +8,34 @@ import (
 	"tiktok-live-recorder/internal/state"
 )
 
+func recordingPlaybackPath(r state.Recording) string {
+	if r.ProcessedPath != "" {
+		return r.ProcessedPath
+	}
+	return r.Path
+}
+
 func (a *application) recordingMenu(m *ui.Menu, r state.Recording, services ui.Services) {
-	if m.Item("Open recording").Disabled(a.busy || r.Path == "" || r.EndedAt.IsZero()).Chosen() {
-		a.work(func() error { return mygo.Shell.OpenPath(r.Path) })
+	path := recordingPlaybackPath(r)
+	if m.Item("Open recording").Disabled(a.busy || path == "" || r.EndedAt.IsZero()).Chosen() {
+		a.work(func() error { return mygo.Shell.OpenPath(path) })
 	}
-	if m.Item("Show in folder").Disabled(r.Path == "").Chosen() {
-		a.reveal(r.Path)
+	if m.Item("Show in folder").Disabled(path == "").Chosen() {
+		a.reveal(path)
 	}
-	if m.Item("Copy file path").Disabled(r.Path == "").Chosen() {
-		services.WriteClipboard(r.Path)
+	if m.Item("Copy file path").Disabled(path == "").Chosen() {
+		services.WriteClipboard(path)
 	}
 	if r.ProcessedPath != "" {
 		m.Separator()
-		if m.Item("Open processed copy").Disabled(a.busy).Chosen() {
-			a.work(func() error { return mygo.Shell.OpenPath(r.ProcessedPath) })
+		if m.Item("Open original FLV").Disabled(a.busy || r.Path == "" || r.EndedAt.IsZero()).Chosen() {
+			a.work(func() error { return mygo.Shell.OpenPath(r.Path) })
 		}
-		if m.Item("Show processed copy in folder").Chosen() {
-			a.reveal(r.ProcessedPath)
+		if m.Item("Show original FLV in folder").Disabled(r.Path == "").Chosen() {
+			a.reveal(r.Path)
 		}
-		if m.Item("Copy processed file path").Chosen() {
-			services.WriteClipboard(r.ProcessedPath)
+		if m.Item("Copy original FLV path").Disabled(r.Path == "").Chosen() {
+			services.WriteClipboard(r.Path)
 		}
 	}
 	m.Separator()

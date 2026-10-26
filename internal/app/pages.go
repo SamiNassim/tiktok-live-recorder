@@ -231,7 +231,7 @@ func (a *application) logsPage(c *ui.Context) {
 func (a *application) recordings(c *ui.Context) {
 	t := c.Theme()
 	hasCompleted := slices.ContainsFunc(a.data.Recordings, func(r state.Recording) bool { return !r.EndedAt.IsZero() })
-	header(c, "Recordings", "Original FLV bytes. No conversion, timestamp changes, or quality loss.", func() {
+	header(c, "Recordings", "Original FLV recordings with separate playback copies. Originals are always kept.", func() {
 		if ui.Button(c, "Clear history…").Disabled(a.busy || a.preview || !hasCompleted).Clicked() {
 			a.clearHistoryOpen = true
 		}
@@ -266,10 +266,10 @@ func (a *application) recordings(c *ui.Context) {
 				}
 				ui.Text(c, label).FontSize(11)
 			case 4:
-				ui.Text(c, filepath.Base(r.Path)).FontSize(11).SingleLine().Tooltip(r.Path + "\n" + r.ProcessedPath + "\n" + r.Error)
+				ui.Text(c, filepath.Base(recordingPlaybackPath(r))).FontSize(11).SingleLine().Tooltip("Original FLV: " + r.Path + "\nPlayback copy: " + r.ProcessedPath + "\n" + r.Error)
 			case 5:
 				if ui.Button(c, "Show").Clicked() {
-					a.reveal(r.Path)
+					a.reveal(recordingPlaybackPath(r))
 				}
 			}
 		}).Grow(1).MinHeight(0).FillWidth()
@@ -395,7 +395,7 @@ func (a *application) settings(c *ui.Context) {
 			accountSection.ScrollIntoView()
 		}
 		a.pollingQueue(c)
-		section(c, "Recording", "The highest-quality offered FLV is saved byte for byte, including HEVC. No remuxing, re-encoding, or timestamp changes. Some players may need a separate processed MKV copy.", func() {
+		section(c, "Recording", "The highest-quality offered FLV is saved byte for byte, including HEVC. New installations also create a lossless MKV playback copy after recording ends. The raw FLV is always kept.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
 				ui.TextInput(c, &a.cfg.RecordingPath).Grow(1).Label("Recording folder").Height(34)
 				if ui.Button(c, "Choose folder…").Clicked() {
@@ -403,7 +403,7 @@ func (a *application) settings(c *ui.Context) {
 				}
 			})
 			toggle(c, "Separate folder for each streamer", "Folder names start with @username, followed by the display name.", &a.cfg.FolderPerStreamer)
-			toggle(c, "Create a processed copy with FFmpeg", "Runs after the raw recording ends. The original FLV is always kept, even if processing fails.", &a.cfg.PostProcess)
+			toggle(c, "Create a processed copy with FFmpeg", "Enabled by default as an MKV with no re-encoding. Runs after recording ends; the original FLV is always kept, even if processing fails.", &a.cfg.PostProcess)
 			ui.Column(c).FillWidth().Gap(10).Disabled(!a.cfg.PostProcess).Children(func() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "Processed copy format").Grow(1)
