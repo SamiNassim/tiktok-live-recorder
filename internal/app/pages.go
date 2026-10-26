@@ -360,17 +360,14 @@ func (a *application) settings(c *ui.Context) {
 	ui.Scroll(c).Label("Settings sections").TrackScroll(&a.settingsScroll).Grow(1).MinHeight(0).FillWidth().Gap(18).DrawOver(func(p *ui.Painter, r ui.Rect) {
 		// A click may rebuild the view before layout; consume only after drawing.
 		a.accountSettingsRequested = false
-		if remaining := a.settingsScroll.MaxY - a.settingsScroll.Y; remaining > 1 {
-			height := min(float32(32), r.H)
-			p.FillGradient(ui.Rect{X: r.X, Y: r.Y + r.H - height, W: max(0, r.W-12), H: height}, ui.LinearGradient{From: t.Background.Alpha(0), To: t.Background.Alpha(min(1, remaining/height)), Angle: 180}, 0)
-		}
+		drawScrollFades(p, r, &a.settingsScroll, t.Background)
 	}).Children(func() {
 		section(c, "Monitoring", "One paced queue checks usernames directly. No running browser is needed.", func() {
 			toggle(c, "Enable monitoring", "Check for live streams automatically. Disabling checks does not interrupt an active recording.", &a.cfg.PollingEnabled)
 		})
 		accountSection := section(c, "TikTok account", "Optional for public streams. A valid account may be needed for login-restricted streams.", func() {
 			ui.Row(c).Gap(10).FillWidth().Children(func() {
-				if ui.TextInput(c, &a.cfg.Cookie).Password().Placeholder("Paste the Cookie request header").Label("TikTok web cookie").Grow(1).Height(34).Changed() {
+				if ui.TextInput(c, &a.cfg.Cookie).Password().Placeholder("Paste the sessionid cookie value").Label("TikTok sessionid").Grow(1).Height(34).Changed() {
 					a.cookieChanged()
 				}
 				if ui.Button(c, "Paste cookie").Clicked() {
@@ -388,24 +385,24 @@ func (a *application) settings(c *ui.Context) {
 				}
 				ui.Text(c, a.accountMessage).TextColor(color).Selectable()
 			}
-			ui.Text(c, "1. Sign in at tiktok.com in your browser.\n2. Open Developer Tools → Network, refresh, and select a request to www.tiktok.com.\n3. Under Request Headers, copy the Cookie value. Paste it above, validate, and save.").FontSize(12).TextColor(t.TextMuted).Selectable()
+			ui.Text(c, "1. Sign in at tiktok.com in your browser.\n2. Open Developer Tools → Application → Cookies → https://www.tiktok.com.\n3. Copy the Value of sessionid. Paste it above, validate, and save.").FontSize(12).TextColor(t.TextMuted).Selectable()
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).TextColor(t.Danger).Children(func() {
 				ui.Icon(c, warningIcon).Size(16, 16).Shrink(0).Label("TikTok account warning")
-				ui.Text(c, "A new account dedicated to this app is strongly recommended. Your cookies grant account access. If the session expires, copy a fresh Cookie header. The account must have permission to view the stream.").Grow(1).MinWidth(0).FontSize(11)
+				ui.Text(c, "A new account dedicated to this app is strongly recommended. Your session grants account access. If it expires, copy a fresh sessionid value. The account must have permission to view the stream.").Grow(1).MinWidth(0).FontSize(11)
 			})
 		})
 		if a.accountSettingsRequested {
 			accountSection.ScrollIntoView()
 		}
 		a.pollingQueue(c)
-		section(c, "Recording", "The original CDN FLV is saved byte for byte, without FFmpeg, remuxing, or timestamp changes. Interrupted files are kept.", func() {
+		section(c, "Recording", "The highest-quality offered FLV is saved byte for byte, including HEVC. No remuxing, re-encoding, or timestamp changes. Some players may need a separate processed MKV copy.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
 				ui.TextInput(c, &a.cfg.RecordingPath).Grow(1).Label("Recording folder").Height(34)
 				if ui.Button(c, "Choose folder…").Clicked() {
 					a.choosePath(true, &a.cfg.RecordingPath)
 				}
 			})
-			toggle(c, "Separate folder for each streamer", "Keep recordings grouped by display name and username.", &a.cfg.FolderPerStreamer)
+			toggle(c, "Separate folder for each streamer", "Folder names start with @username, followed by the display name.", &a.cfg.FolderPerStreamer)
 			toggle(c, "Create a processed copy with FFmpeg", "Runs after the raw recording ends. The original FLV is always kept, even if processing fails.", &a.cfg.PostProcess)
 			ui.Column(c).FillWidth().Gap(10).Disabled(!a.cfg.PostProcess).Children(func() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {

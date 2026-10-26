@@ -309,7 +309,7 @@ func (a *application) sidebar(c *ui.Context) {
 		})
 		ui.Sidebar(c, &a.page, func() {
 			for _, nav := range []struct{ id, label string }{{"streamers", "Streamers"}, {"recordings", "Recordings"}, {"logs", "Logs"}, {"settings", "Settings"}} {
-				ui.SidebarItem(c, nav.id, navIcons[nav.id], nav.label).Padding(13, 12)
+				navigationItem(c, nav.id, nav.label, a.page == nav.id)
 			}
 		}).Width(192).Grow(1).Background(background)
 		ui.Column(c).Padding(14, 10).Gap(12).Children(func() {
@@ -358,7 +358,7 @@ func (a *application) validateCookie() {
 	a.accountCookie = ""
 	a.accountError = err
 	if err != nil || cookie == "" {
-		a.accountMessage = "Paste a signed-in TikTok Cookie header first."
+		a.accountMessage = "Paste your TikTok sessionid cookie value first."
 		if err != nil {
 			a.accountMessage = err.Error()
 		}

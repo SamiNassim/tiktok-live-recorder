@@ -41,7 +41,7 @@ func (a *application) sessionBadge() sessionBadge {
 		return sessionBadge{name: "Checking session…", detail: "Verifying TikTok account", tooltip: "Checking the account associated with your saved session.", attention: true}
 	}
 	if errors.Is(a.accountError, tiktok.ErrSessionExpired) {
-		return sessionBadge{name: "Session expired", detail: "Update in Settings", tooltip: "Sign in again and update your Cookie header in Settings.", invalid: true}
+		return sessionBadge{name: "Session expired", detail: "Update in Settings", tooltip: "Sign in again and update your sessionid value in Settings.", invalid: true}
 	}
 	if errors.Is(a.accountError, tiktok.ErrAccess) {
 		return sessionBadge{name: "Session rejected", detail: "Check in Settings", tooltip: "TikTok rejected account access. Validate the session again in Settings.", invalid: true}
