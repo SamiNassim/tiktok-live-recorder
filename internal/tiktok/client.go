@@ -15,10 +15,10 @@ import (
 var (
 	ErrNotFound       = errors.New("TikTok account was not found or has never hosted a live")
 	ErrAccess         = errors.New("TikTok requires a valid account or permission to watch this live")
-	ErrUnavailable    = errors.New("streamer is live, but TikTok returned no supported FLV stream")
+	ErrUnavailable    = errors.New("streamer is live, but TikTok withheld playback URLs; check the saved session, account permissions, or regional restrictions")
 	ErrBlocked        = errors.New("TikTok returned an unexpected response; access may be temporarily limited")
 	ErrRateLimited    = errors.New("TikTok rate limited this connection; checks will back off")
-	ErrSessionExpired = errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh Cookie header")
+	ErrSessionExpired = errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh sessionid value")
 )
 
 type Source struct {
@@ -56,6 +56,9 @@ func NewClient() *Client {
 }
 
 func (c *Client) Configure(cookie string, delay time.Duration) {
+	if parsed, err := ParseCookie(cookie); err == nil {
+		cookie = parsed
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cookie, c.delay = cookie, delay
@@ -156,7 +159,10 @@ func (c *Client) Check(ctx context.Context, username string) (Stream, error) {
 	if errors.Is(secondErr, ErrRateLimited) {
 		return primary, secondErr
 	}
-	if primary.Live && !errors.Is(err, ErrAccess) && !errors.Is(secondErr, ErrAccess) {
+	if errors.Is(err, ErrAccess) || errors.Is(secondErr, ErrAccess) {
+		return primary, ErrAccess
+	}
+	if primary.Live {
 		return primary, ErrUnavailable
 	}
 	return primary, err

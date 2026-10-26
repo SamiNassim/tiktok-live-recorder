@@ -182,8 +182,8 @@ func parseSDK(raw string) []Source {
 }
 
 func ordered(sources []Source) []Source {
-	// Never prefer an adaptive/audio-only rendition over an explicitly offered
-	// source stream. Preserve the original codec instead of re-encoding it.
+	// Preserve the highest-quality offered source, including HEVC. Player
+	// compatibility must not downgrade the captured video or rewrite its bytes.
 	rank := func(s Source) int {
 		switch strings.ToLower(s.Quality) {
 		case "origin", "origion":

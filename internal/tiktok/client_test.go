@@ -32,10 +32,56 @@ func TestCookieParsing(t *testing.T) {
 			t.Fatal(got, err)
 		}
 	}
-	for _, raw := range []string{"token-only", "sessionid=synthetic", "tt-target-idc=testdc", "sessionid=x; tt-target-idc=test\nInjected: yes"} {
+	for _, raw := range []string{strings.Repeat("a", 32), "sessionid=" + strings.Repeat("a", 32), `{"sessionid":"` + strings.Repeat("a", 32) + `"}`} {
+		got, err := ParseCookie(raw)
+		if err != nil || got != "sessionid="+strings.Repeat("a", 32) {
+			t.Fatal("sessionid-only authentication was rejected", err)
+		}
+	}
+	for _, raw := range []string{"token-only", "tt-target-idc=testdc", "sessionid=x; tt-target-idc=test\nInjected: yes", strings.Repeat("z", 32), strings.Repeat("a", 31)} {
 		if _, err := ParseCookie(raw); err == nil {
 			t.Fatal("accepted invalid cookie")
 		}
+	}
+}
+
+func TestRestrictedLivePreservesExplicitAccessDenial(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "api-live") {
+			w.Write([]byte(`{"statusCode":0,"data":{"liveRoom":{"status":2},"user":{"roomId":"7000000000000000001"}}}`))
+			return
+		}
+		w.Write([]byte(`{"status_code":4003110}`))
+	})
+	s, err := c.Check(context.Background(), "demo_creator")
+	if !s.Live || !errors.Is(err, ErrAccess) {
+		t.Fatal("explicit access denial was replaced by a generic format error", err)
+	}
+}
+
+func TestSessionValueAuthorizesRestrictedDiscovery(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("sessionid")
+		if err != nil || cookie.Value != strings.Repeat("a", 32) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(webFixture(t, 2))
+	})
+	c.Configure(strings.Repeat("a", 32), 0)
+	s, err := c.Check(context.Background(), "demo_creator")
+	if err != nil || !s.Live || len(s.Sources) == 0 {
+		t.Fatal("sessionid-only request did not authenticate", err)
+	}
+}
+
+func TestOriginalQualityIsNotDowngradedForPlayerCompatibility(t *testing.T) {
+	sources := ordered([]Source{
+		{URL: "https://media.example.invalid/hevc.flv", Quality: "origin", Codec: "h265", Width: 1080, Height: 1920},
+		{URL: "https://media.example.invalid/avc.flv", Quality: "hd", Codec: "h264", Width: 720, Height: 1280},
+	})
+	if len(sources) != 2 || sources[0].Quality != "origin" || sources[0].Codec != "h265" || sources[0].Width != 1080 {
+		t.Fatal("original quality was downgraded for playback compatibility")
 	}
 }
 

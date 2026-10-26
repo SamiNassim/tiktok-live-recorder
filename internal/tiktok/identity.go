@@ -40,15 +40,21 @@ func ParseID(raw string) (string, error) {
 	return strings.ToLower(s), nil
 }
 
-// ParseCookie accepts a copied Cookie request header or a JSON object. Preserve
-// routing and anti-abuse cookies rather than inventing a data-center identity.
+// ParseCookie accepts a sessionid value, Cookie header, or JSON object. Extra
+// routing cookies are preserved when supplied, but are not needed for web login.
 func ParseCookie(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", nil
 	}
 	if len(raw) > 64<<10 || strings.ContainsAny(raw, "\r\n\x00") {
-		return "", errors.New("paste one Cookie header, without line breaks")
+		return "", errors.New("paste the sessionid value without line breaks")
+	}
+	if !strings.ContainsAny(raw, "=;{ \t") {
+		if len(raw) != 32 || strings.Trim(raw, "0123456789abcdefABCDEF") != "" {
+			return "", errors.New("paste the 32-character sessionid cookie value from TikTok")
+		}
+		raw = "sessionid=" + raw
 	}
 	if strings.HasPrefix(raw, "{") {
 		var values map[string]string
@@ -79,10 +85,7 @@ func ParseCookie(raw string) (string, error) {
 		values[cookie.Name] = cookie.Value
 	}
 	if values["sessionid"] == "" && values["sessionid_ss"] == "" && values["sid_tt"] == "" {
-		return "", errors.New("the cookie header needs sessionid or sessionid_ss from a signed-in TikTok account")
-	}
-	if values["tt-target-idc"] == "" {
-		return "", errors.New("include tt-target-idc from the same browser session")
+		return "", errors.New("paste the sessionid cookie value from a signed-in TikTok account")
 	}
 	// Canonical ordering makes validation and configuration comparisons stable.
 	var names []string
