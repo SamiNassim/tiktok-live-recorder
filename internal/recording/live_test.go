@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -134,7 +136,7 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	source := filepath.Join(t.TempDir(), "raw.flv")
-	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000", "-t", "0.3", "-c:a", "aac", "-f", "flv", source)
+	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000", "-t", "0.3", "-c:a", "aac", "-output_ts_offset", "5400", "-flvflags", "no_duration_filesize", "-f", "flv", source)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create synthetic FLV: %v: %s", err, out)
 	}
@@ -158,4 +160,41 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 	if info, err := os.Stat(processed); err != nil || info.Size() == 0 {
 		t.Fatal("processed copy missing", err)
 	}
+	t.Run("playback timeline starts at zero", func(t *testing.T) {
+		probe, err := exec.LookPath("ffprobe")
+		if err != nil {
+			t.Skip("FFprobe is not installed; raw preservation was still checked")
+		}
+		timing := func(name string) (float64, float64) {
+			t.Helper()
+			out, err := exec.CommandContext(ctx, probe, "-v", "error", "-show_entries", "format=start_time,duration", "-of", "json", name).Output()
+			if err != nil {
+				t.Fatal("probe playback timeline", err)
+			}
+			var result struct {
+				Format struct {
+					Start    string `json:"start_time"`
+					Duration string `json:"duration"`
+				} `json:"format"`
+			}
+			if err := json.Unmarshal(out, &result); err != nil {
+				t.Fatal(err)
+			}
+			start, err := strconv.ParseFloat(result.Format.Start, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			duration, err := strconv.ParseFloat(result.Format.Duration, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return start, duration
+		}
+		if start, duration := timing(source); start < 5000 || duration < 5000 {
+			t.Fatal("synthetic FLV lacks the live timestamp offset", start, duration)
+		}
+		if start, duration := timing(processed); start < 0 || start > 0.1 || duration < 0.2 || duration > 1 {
+			t.Fatal("MKV retained the inflated live timeline", start, duration)
+		}
+	})
 }

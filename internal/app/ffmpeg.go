@@ -89,8 +89,8 @@ func (a *application) installFFmpeg() {
 
 func (a *application) ffmpegDialog(c *ui.Context) {
 	ui.Modal(c, &a.ffmpegOpen, func() {
-		ui.Text(c, "Get ready to record").FontSize(22).FontWeight(600)
-		ui.Text(c, "Raw FLV recording needs no FFmpeg. Install it only to create optional processed copies of your recordings.").Width(450).MaxLines(4)
+		ui.Text(c, "Set up playback copies").FontSize(22).FontWeight(600)
+		ui.Text(c, "FFmpeg creates playback copies after recording ends. Install it for better player compatibility. The original FLV is always kept, and raw recording works without FFmpeg.").Width(450).MaxLines(4)
 		provider, sourceErr := ffmpeg.DownloadProvider()
 		if sourceErr == nil {
 			ui.Text(c, "Downloads a third-party FFmpeg build from "+provider+" and verifies its checksum. Installs only for your user account; no administrator access or PATH changes.").Width(450).FontSize(12).TextColor(c.Theme().TextMuted).MaxLines(5)

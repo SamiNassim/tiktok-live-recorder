@@ -83,7 +83,7 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{Theme: "system", RecordingPath: filepath.Join(home, "Movies", "TikTok Live Recorder"), PollingEnabled: true,
 		PollSeconds: 75, ColdSeconds: 300, RequestDelaySeconds: 2, AutoPromote: true, Notifications: true, FolderPerStreamer: true,
-		FFmpegArgs: `-map 0:v? -map 0:a? -c copy`, OutputExtension: "mkv"}
+		PostProcess: true, FFmpegArgs: `-map 0:v? -map 0:a? -c copy`, OutputExtension: "mkv"}
 }
 
 func (c Config) Validate() error {

@@ -17,6 +17,9 @@ func TestDefaultsAndRoundTrip(t *testing.T) {
 		t.Fatal("queued polling must be enabled by default")
 	}
 	c := s.Config()
+	if !c.PostProcess || c.OutputExtension != "mkv" || c.FFmpegArgs != "-map 0:v? -map 0:a? -c copy" {
+		t.Fatal("new installations must create lossless MKV playback copies")
+	}
 	c.Cookie = "temporary-cookie"
 	if err = s.SaveConfig(c); err != nil {
 		t.Fatal(err)
@@ -35,6 +38,36 @@ func TestDefaultsAndRoundTrip(t *testing.T) {
 	d.Streamers[0].ID = "mutated"
 	if r.Data().Streamers[0].ID != "alice" {
 		t.Fatal("snapshot aliases state")
+	}
+}
+
+func TestSavedProcessingPreferencesSurviveNewDefaults(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		name := "disabled"
+		if enabled {
+			name = "custom format"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := s.Config()
+			cfg.PostProcess = enabled
+			cfg.OutputExtension = "mp4"
+			cfg.FFmpegArgs += " -movflags +faststart"
+			if err := s.SaveConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(s.Directory())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := reopened.Config()
+			if got.PostProcess != enabled || got.OutputExtension != cfg.OutputExtension || got.FFmpegArgs != cfg.FFmpegArgs {
+				t.Fatal("saved processing preferences were replaced by defaults")
+			}
+		})
 	}
 }
 

@@ -207,7 +207,7 @@ func TestFeedbackToastsExpireAcrossNavigation(t *testing.T) {
 	}
 	a.ffmpegOpen = true
 	tt.Frame()
-	if !tt.HasText("Get ready to record") || !tt.HasText("Download and install") {
+	if !tt.HasText("Set up playback copies") || !tt.HasText("Download and install") {
 		t.Fatal("FFmpeg setup prompt is missing")
 	}
 	if err := tt.Click("Later"); err != nil {
