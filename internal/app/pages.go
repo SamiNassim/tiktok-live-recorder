@@ -26,7 +26,7 @@ func (a *application) streamers(c *ui.Context) {
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(8).Children(func() {
 		ui.Row(c).Padding(16).Gap(10).Wrap().AlignItems(ui.Center).FillWidth().Children(func() {
 			ui.SearchField(c, &a.query).Placeholder("Search streamers…").Label("Search streamers").Grow(1).MinWidth(140).Height(34)
-			ui.Select(c, &a.status, []string{"All statuses", "Recording", "Live", "Offline", "Recording paused", "Monitoring paused", "Live · access needed", "Needs attention", "Waiting", "Finalizing"}).Width(160).Height(34).Label("Filter status")
+			ui.Select(c, &a.status, []string{"All statuses", "Recording", "Live", "Offline", "Reconnecting", "Recording paused", "Monitoring paused", "Live · access needed", "Needs attention", "Waiting", "Finalizing"}).Width(160).Height(34).Label("Filter status")
 			ui.Select(c, &a.priority, []string{"All priorities", "Normal priority", "Low priority"}).Width(150).Height(34).Label("Filter priority")
 			ui.Select(c, &a.order, []string{"Last recorded", "Name", "Date added", "Status"}).Width(144).Height(34).Label("Sort streamers")
 		})
@@ -72,7 +72,7 @@ func (a *application) streamers(c *ui.Context) {
 						color = t.Success
 					case "Monitoring paused":
 						color = t.Warning
-					case "Checking", "Starting":
+					case "Checking", "Starting", "Reconnecting":
 						color = t.Accent
 					case "Needs attention", "Live · access needed":
 						color = t.Warning

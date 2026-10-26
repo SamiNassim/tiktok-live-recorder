@@ -44,12 +44,19 @@ type activeRecording interface {
 	Result() recording.Result
 }
 type startRecording func(context.Context, state.Streamer, tiktok.Stream, state.Config) (activeRecording, error)
+
+const (
+	recoveryInterval = 5 * time.Second
+	recoveryWindow   = 2 * time.Minute
+)
+
 type item struct {
-	row          Row
-	handle       activeRecording
-	recordCancel context.CancelFunc
-	failures     int
-	config       state.Config
+	row           Row
+	handle        activeRecording
+	recordCancel  context.CancelFunc
+	failures      int
+	config        state.Config
+	recoveryUntil time.Time
 }
 type Engine struct {
 	store      *state.Store
@@ -112,6 +119,12 @@ func (e *Engine) SaveConfig(c state.Config) error {
 	for _, it := range e.items {
 		it.row.NextCheck = time.Now()
 		it.failures = 0
+		if !c.PollingEnabled {
+			it.recoveryUntil = time.Time{}
+			if it.row.Status == "Reconnecting" {
+				it.row.Status = "Waiting"
+			}
+		}
 	}
 	e.mu.Unlock()
 	e.wakeUp()
@@ -158,6 +171,7 @@ func (e *Engine) Edit(id string, change func(*state.Streamer)) error {
 				it.row.Error = ""
 				it.failures = 0
 				if after.Paused || after.RecordingPaused {
+					it.recoveryUntil = time.Time{}
 					stop(it)
 				}
 				if it.handle == nil {
@@ -369,6 +383,7 @@ func (e *Engine) check(id string) {
 		e.mu.Unlock()
 		return
 	}
+	previousStatus := it.row.Status
 	it.row.Status = "Checking"
 	e.mu.Unlock()
 	source, err := e.client.Check(e.ctx, id)
@@ -385,8 +400,9 @@ func (e *Engine) check(id string) {
 		return
 	}
 	it.row.Streamer = data.Streamers[at]
-	it.row.LastCheck = time.Now()
-	it.row.NextCheck = time.Now().Add(interval(cfg, it.row.Streamer.LowPriority))
+	now := time.Now()
+	it.row.LastCheck = now
+	it.row.NextCheck = now.Add(interval(cfg, it.row.Streamer.LowPriority))
 	if source.Name != "" || source.Avatar != "" {
 		e.persist(func(d *state.Data) {
 			for i := range d.Streamers {
@@ -405,9 +421,10 @@ func (e *Engine) check(id string) {
 	}
 	if err == nil || source.Live {
 		it.row.Live = source.Live
-		it.row.LiveCheckedAt = time.Now()
+		it.row.LiveCheckedAt = now
 	}
 	if err != nil {
+		it.recoveryUntil = time.Time{}
 		it.failures++
 		if it.row.Error != err.Error() {
 			e.log.Write("WARN", id, err.Error())
@@ -426,9 +443,22 @@ func (e *Engine) check(id string) {
 	it.row.Error = ""
 	it.failures = 0
 	if !source.Live {
+		if now.Before(it.recoveryUntil) && !it.row.Streamer.RecordingPaused {
+			it.row.Status = "Reconnecting"
+			it.row.NextCheck = now.Add(min(recoveryInterval, it.recoveryUntil.Sub(now)))
+			if previousStatus != "Reconnecting" {
+				e.log.Write("INFO", id, "Stream temporarily unavailable; checking again shortly")
+			}
+			return
+		}
+		it.recoveryUntil = time.Time{}
 		it.row.Status = "Offline"
+		if previousStatus == "Reconnecting" {
+			e.log.Write("INFO", id, "Stream has not resumed; returning to the configured polling interval")
+		}
 		return
 	}
+	it.recoveryUntil = time.Time{}
 	if it.row.Streamer.RecordingPaused {
 		it.row.Status = "Live"
 		return
@@ -519,7 +549,11 @@ func (e *Engine) completed(it *item) {
 	it.row.StartedAt = time.Time{}
 	it.row.Path = ""
 	it.row.Status = "Waiting"
-	it.row.NextCheck = time.Now().Add(5 * time.Second)
+	it.recoveryUntil = time.Time{}
+	if !immediate && (r.Err == nil || r.TransportEnded) && r.Bytes > 0 && e.ctx.Err() == nil && e.store.Config().PollingEnabled {
+		it.recoveryUntil = time.Now().Add(recoveryWindow)
+	}
+	it.row.NextCheck = time.Now().Add(recoveryInterval)
 	if immediate {
 		it.row.NextCheck = time.Now()
 	}
