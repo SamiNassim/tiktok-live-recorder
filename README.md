@@ -1,7 +1,9 @@
 # TikTok Live Recorder
 
 <p align="center">
-  <img src="internal/assets/icon.png" alt="TikTok Live Recorder icon" width="100" height="100">
+  <a href="https://github.com/SamiNassim/tiktok-live-recorder/releases">
+    <img src="internal/assets/icon.png" alt="TikTok Live Recorder icon" width="100" height="100">
+  </a>
 </p>
 
 A native desktop app for automatically recording TikTok livestreams on macOS,
