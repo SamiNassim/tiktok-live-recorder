@@ -32,6 +32,7 @@ func (s *Store) CompleteProcessing(source, processed string, deleteRaw bool, rem
 		return false, fmt.Errorf("save processed recording: %w", err)
 	}
 	s.data = next
+	s.dataRevision++
 	if !deleteRaw || !s.config.PostProcess || !s.config.DeleteRawAfterProcessing || next.Recordings[i].RawDeleted {
 		return false, nil
 	}
@@ -55,6 +56,7 @@ func (s *Store) CompleteProcessing(source, processed string, deleteRaw bool, rem
 	next = clone(s.data)
 	next.Recordings[i].RawDeleted = true
 	s.data = next
+	s.dataRevision++
 	if err := writeJSON(filepath.Join(s.dir, "data.json"), next); err != nil {
 		return true, fmt.Errorf("save raw cleanup status: %w", err)
 	}

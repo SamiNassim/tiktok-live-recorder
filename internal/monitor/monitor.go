@@ -235,11 +235,21 @@ func (e *Engine) Remove(id string) error {
 	return err
 }
 func (e *Engine) Snapshot() Snapshot {
+	s, _ := e.snapshot(nil)
+	return s
+}
+
+// SnapshotIfChanged reuses an immutable snapshot while all rows and summary
+// fields match. Map iteration order cannot cause a spurious change.
+func (e *Engine) SnapshotIfChanged(previous Snapshot) (Snapshot, bool) {
+	return e.snapshot(&previous)
+}
+
+func (e *Engine) snapshot(previous *Snapshot) (Snapshot, bool) {
 	s := Snapshot{Polling: e.store.Config().PollingEnabled}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, it := range e.items {
-		s.Rows = append(s.Rows, it.row)
 		if it.handle != nil && it.row.Status == "Recording" {
 			s.Recording++
 		}
@@ -253,7 +263,26 @@ func (e *Engine) Snapshot() Snapshot {
 			s.RecordingPaused++
 		}
 	}
-	return s
+	if previous != nil && s.Polling == previous.Polling &&
+		s.Recording == previous.Recording && s.QueueTargets == previous.QueueTargets &&
+		s.MonitoringPaused == previous.MonitoringPaused && s.RecordingPaused == previous.RecordingPaused &&
+		len(previous.Rows) == len(e.items) {
+		unchanged := true
+		for _, row := range previous.Rows {
+			if it := e.items[row.Streamer.ID]; it == nil || it.row != row {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			return *previous, false
+		}
+	}
+	s.Rows = make([]Row, 0, len(e.items))
+	for _, it := range e.items {
+		s.Rows = append(s.Rows, it.row)
+	}
+	return s, true
 }
 
 func (e *Engine) run() {
