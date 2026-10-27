@@ -33,6 +33,15 @@ The notes include commit messages and descriptions since the previous release.
 You can edit them in the draft. Builds use no Apple or Windows publisher
 certificates; first-launch instructions are in the [README](README.md#download-and-open).
 
+## If no draft appears
+
+Open **Actions** first. A draft appears only after all builds succeed.
+
+If the tag is on GitHub but no run started, open **Actions → Release → Run workflow**.
+Leave the workflow branch set to **master**, enter the existing tag (for example,
+`v0.1.0`), and click **Run workflow**. This builds the tagged code without moving
+the tag. If a run failed, open it and choose **Re-run failed jobs** instead.
+
 ## If you change your mind
 
 If only the notes need changing, edit the draft directly.
