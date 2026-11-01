@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/logging"
 	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
@@ -455,17 +456,17 @@ func (e *Engine) check(id string) {
 	if err != nil {
 		it.recoveryUntil = time.Time{}
 		it.failures++
-		if it.row.Error != err.Error() {
-			e.log.Write("WARN", id, err.Error())
-		}
-		it.row.Error = err.Error()
+		previousError := it.row.Error
+		it.row.Error = fault.Reason(err)
 		it.row.Status = "Needs attention"
 		if source.Live {
 			it.row.Status = "Live · access needed"
 		}
 		if errors.Is(err, tiktok.ErrRateLimited) {
 			it.row.NextCheck = time.Now().Add(max(5*time.Minute, interval(cfg, it.row.Streamer.LowPriority)))
-			e.log.Write("WARN", id, "Rate limited; backing off before checking this account again")
+		}
+		if previousError != it.row.Error {
+			e.log.WriteError("WARN", id, "Could not complete the TikTok stream check: "+it.row.Error+". "+nextCheckMessage(cfg, it), err)
 		}
 		return
 	}
@@ -476,14 +477,14 @@ func (e *Engine) check(id string) {
 			it.row.Status = "Reconnecting"
 			it.row.NextCheck = now.Add(min(recoveryInterval, it.recoveryUntil.Sub(now)))
 			if previousStatus != "Reconnecting" {
-				e.log.Write("INFO", id, "Stream temporarily unavailable; checking again shortly")
+				e.log.Write("INFO", id, "Stream temporarily unavailable. "+nextCheckMessage(cfg, it))
 			}
 			return
 		}
 		it.recoveryUntil = time.Time{}
 		it.row.Status = "Offline"
 		if previousStatus == "Reconnecting" {
-			e.log.Write("INFO", id, "Stream has not resumed; returning to the configured polling interval")
+			e.log.Write("INFO", id, "The stream did not resume during the recovery window; returning to the configured polling interval. "+nextCheckMessage(cfg, it))
 		}
 		return
 	}
@@ -509,9 +510,13 @@ func (e *Engine) check(id string) {
 			it.row.NextCheck = time.Now()
 			return
 		}
-		it.row.Error = startErr.Error()
+		it.row.Error = "Could not start recording: " + fault.Reason(startErr)
 		it.row.NextCheck = time.Now().Add(max(15*time.Second, time.Duration(cfg.RequestDelaySeconds)*time.Second))
-		e.log.Write("WARN", id, startErr.Error())
+		level := "WARN"
+		if fault.RequiresAction(startErr) {
+			level = "ERROR"
+		}
+		e.log.WriteError(level, id, it.row.Error+". "+nextCheckMessage(cfg, it), startErr)
 		return
 	}
 	it.handle = h
@@ -555,21 +560,12 @@ func (e *Engine) completed(it *item) {
 				d.Recordings[i].EndedAt = r.EndedAt
 				d.Recordings[i].Bytes = r.Bytes
 				if r.Err != nil {
-					d.Recordings[i].Error = r.Err.Error()
+					d.Recordings[i].Error = fault.Reason(r.Err)
 				}
 			}
 		}
 	})
-	if r.TransportEnded {
-		e.log.Write("INFO", it.row.Streamer.ID, "Media connection ended; raw file saved.")
-	} else if r.Err != nil {
-		e.log.Write("WARN", it.row.Streamer.ID, "Recording ended; raw file kept: "+r.Err.Error())
-	} else {
-		e.log.Write("INFO", it.row.Streamer.ID, fmt.Sprintf("Raw FLV finalized (%d bytes)", r.Bytes))
-	}
-	if it.config.PostProcess && (r.Err == nil || r.TransportEnded) && r.Bytes > 13 && e.ctx.Err() == nil {
-		e.processCopy(it.row.Streamer.ID, initial, it.config)
-	}
+	shouldProcess := it.config.PostProcess && (r.Err == nil || r.TransportEnded) && r.Bytes > 13 && e.ctx.Err() == nil
 	if it.recordCancel != nil {
 		it.recordCancel()
 		it.recordCancel = nil
@@ -586,10 +582,18 @@ func (e *Engine) completed(it *item) {
 	if immediate {
 		it.row.NextCheck = time.Now()
 	}
+	level, message := recordingCompletion(r, immediate || e.ctx.Err() != nil)
+	if e.ctx.Err() == nil {
+		message += " " + nextCheckMessage(e.store.Config(), it)
+	}
+	e.log.WriteError(level, it.row.Streamer.ID, message, r.Err)
+	if shouldProcess {
+		e.processCopy(it.row.Streamer.ID, initial, it.config)
+	}
 }
 func (e *Engine) persist(change func(*state.Data)) {
 	if err := e.store.Update(func(d *state.Data) error { change(d); return nil }); err != nil {
-		e.log.Write("ERROR", "storage", err.Error())
+		e.log.WriteError("ERROR", "storage", "Could not save streamer and recording history: "+fault.Reason(err)+". Recent changes may not survive an app restart. Check available disk space and folder permissions.", err)
 	}
 }
 func (e *Engine) recoverHistory() {

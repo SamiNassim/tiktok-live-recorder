@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"tiktok-live-recorder/internal/fault"
 )
 
 var (
@@ -17,7 +19,7 @@ var (
 	ErrAccess         = errors.New("TikTok requires a valid account or permission to watch this live")
 	ErrUnavailable    = errors.New("streamer is live, but TikTok withheld playback URLs; check the saved session, account permissions, or regional restrictions")
 	ErrBlocked        = errors.New("TikTok returned an unexpected response; this check could not be completed")
-	ErrRateLimited    = errors.New("TikTok rate limited this connection; checks will back off")
+	ErrRateLimited    = errors.New("TikTok is limiting requests from this connection")
 	ErrSessionExpired = errors.New("TikTok session is expired or could not be verified; sign in again and copy a fresh sessionid value")
 )
 
@@ -78,12 +80,16 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		message := "waiting for a turn in the TikTok request queue was interrupted"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			message = "the TikTok request queue wait timed out before a request could be sent"
+		}
+		return fault.Wrap(message, ctx.Err())
 	case <-t.C:
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return ErrBlocked
+		return fault.Wrap("could not prepare the TikTok request", errors.Join(ErrBlocked, err))
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
@@ -94,15 +100,12 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.New("could not reach TikTok; check the network and retry")
+		return fault.Wrap("TikTok did not answer the request: "+fault.Reason(err), err)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return ErrAccess
+		return fault.Wrap(ErrAccess.Error(), fmt.Errorf("%w (HTTP %d)", ErrAccess, resp.StatusCode))
 	case http.StatusTooManyRequests:
 		c.mu.Lock()
 		c.blockedUntil = time.Now().Add(5 * time.Minute)
@@ -110,12 +113,21 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 		return ErrRateLimited
 	case http.StatusOK:
 	default:
-		return fmt.Errorf("TikTok returned HTTP %d", resp.StatusCode)
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("TikTok's service is temporarily unavailable (HTTP %d %s)", resp.StatusCode, http.StatusText(resp.StatusCode))
+		}
+		return fmt.Errorf("TikTok refused the request (HTTP %d %s)", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 	const limit = 4 << 20
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil || len(body) > limit || json.Unmarshal(body, target) != nil {
-		return ErrBlocked
+	if err != nil {
+		return fault.Wrap("TikTok's response could not be read completely", errors.Join(ErrBlocked, err))
+	}
+	if len(body) > limit {
+		return fault.Wrap("TikTok's response exceeded the supported size", ErrBlocked)
+	}
+	if err := json.Unmarshal(body, target); err != nil {
+		return fault.Wrap("TikTok returned an unreadable response; this check could not be completed", errors.Join(ErrBlocked, err))
 	}
 	return nil
 }
@@ -163,10 +175,10 @@ func (c *Client) Check(ctx context.Context, username string) (Stream, error) {
 		return primary, secondErr
 	}
 	if errors.Is(err, ErrAccess) || errors.Is(secondErr, ErrAccess) {
-		return primary, ErrAccess
+		return primary, fault.Wrap(ErrAccess.Error(), errors.Join(err, secondErr))
 	}
 	if primary.Live {
-		return primary, ErrUnavailable
+		return primary, fault.Wrap(ErrUnavailable.Error(), errors.Join(ErrUnavailable, err, secondErr))
 	}
 	return primary, err
 }

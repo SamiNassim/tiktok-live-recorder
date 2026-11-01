@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"tiktok-live-recorder/internal/fault"
 )
 
 func TestIDs(t *testing.T) {
@@ -226,7 +228,7 @@ func TestCanceledRateWaitAndRedactedTransportErrors(t *testing.T) {
 		return nil, errors.New("https://secret.invalid/?token=synthetic-secret")
 	})}
 	_, err := c.Check(context.Background(), "demo_creator")
-	if err == nil || strings.Contains(err.Error(), "synthetic-secret") {
+	if err == nil || strings.Contains(err.Error(), "synthetic-secret") || strings.Contains(fault.Details(err), "synthetic-secret") {
 		t.Fatal(err)
 	}
 }

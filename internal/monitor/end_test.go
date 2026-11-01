@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/recording"
 )
 
@@ -18,7 +19,7 @@ type endedRecording struct {
 
 func (h *endedRecording) Result() recording.Result { return h.result }
 
-func TestTransportEndIsInformationalButStorageFailuresRemainWarnings(t *testing.T) {
+func TestTransportEndIsInformationalAndTypedStorageFailuresNeedAttention(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		err            error
@@ -28,6 +29,8 @@ func TestTransportEndIsInformationalButStorageFailuresRemainWarnings(t *testing.
 		{"early HTTP close", io.ErrUnexpectedEOF, true, "INFO"},
 		{"disk failure", errors.New("disk sync failed"), false, "WARN"},
 		{"mixed errors", errors.Join(io.ErrUnexpectedEOF, errors.New("disk sync failed")), false, "WARN"},
+		{"typed disk failure", fault.Action("could not synchronize the raw FLV", errors.New("disk failure")), false, "ERROR"},
+		{"mixed typed disk failure", errors.Join(io.ErrUnexpectedEOF, fault.Action("could not synchronize the raw FLV", errors.New("disk failure"))), false, "ERROR"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, log := fixture(t)

@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"tiktok-live-recorder/internal/fault"
 )
 
 // OpenFLV validates the header, then returns every original byte, including
@@ -57,7 +59,7 @@ func openFLV(ctx context.Context, client *http.Client, sources []Source) (io.Rea
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			last = errors.New("could not connect to the TikTok video CDN")
+			last = fault.Wrap("could not connect to TikTok's video server: "+fault.Reason(err), err)
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -77,7 +79,11 @@ func openFLV(ctx context.Context, client *http.Client, sources []Source) (io.Rea
 			}
 		}
 		resp.Body.Close()
-		last = errors.New("video CDN returned no valid FLV header; trying another rendition")
+		if err != nil {
+			last = fault.Wrap("TikTok's video server did not supply a complete FLV header: "+fault.Reason(err), err)
+		} else {
+			last = errors.New("none of the tried video sources supplied a valid FLV stream header")
+		}
 	}
 	if last == nil {
 		last = ErrUnavailable
