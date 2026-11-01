@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/state"
 )
 
@@ -39,33 +40,37 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 		if err == nil {
 			copyInfo, err = os.Lstat(path)
 			if err != nil || !copyInfo.Mode().IsRegular() || copyInfo.Size() == 0 {
-				err = errors.New("the processed copy is missing or invalid; the raw FLV was kept")
+				err = fault.Action("the processed copy is missing or invalid; raw FLV kept", err)
 			}
 		}
 		if err != nil {
 			e.persist(func(d *state.Data) {
 				for i := range d.Recordings {
 					if d.Recordings[i].Path == source {
-						d.Recordings[i].Error = err.Error()
+						d.Recordings[i].Error = fault.Reason(err)
 					}
 				}
 			})
-			e.log.Write("WARN", id, err.Error())
+			level := "WARN"
+			if fault.RequiresAction(err) {
+				level = "ERROR"
+			}
+			e.log.WriteError(level, id, "Processed copy failed: "+fault.Reason(err), err)
 			return
 		}
 		deleted, err := e.store.CompleteProcessing(source, path, deleteRaw, func() error {
 			if originalErr != nil {
-				return errors.New("files could not be checked before cleanup")
+				return fault.Wrap("the original FLV could not be checked before cleanup", originalErr)
 			}
 			return removeProcessedRaw(e.ctx, source, path, original, copyInfo)
 		})
 		if deleted {
 			e.log.Write("INFO", id, "Processed copy ready; original FLV deleted")
 			if err != nil {
-				e.log.Write("ERROR", id, "The FLV was deleted, but its cleanup status could not be saved; the processed copy is retained in history")
+				e.log.WriteError("ERROR", id, "The raw FLV was deleted, but its cleanup status could not be saved: "+fault.Reason(err)+". The processed copy is retained in history.", err)
 			}
 		} else if err != nil {
-			e.log.Write("WARN", id, "Processed copy ready; raw FLV kept: "+err.Error())
+			e.log.WriteError("WARN", id, "Processed copy ready; raw FLV kept because cleanup could not complete: "+fault.Reason(err), err)
 		} else {
 			e.log.Write("INFO", id, "Processed copy ready; raw FLV kept")
 		}
@@ -85,13 +90,13 @@ func removeProcessedRaw(ctx context.Context, source, processed string, original,
 			before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
 	}
 	if rawErr != nil || copyErr != nil || !unchanged(original, currentRaw) || !unchanged(copyInfo, currentCopy) || currentCopy.Size() == 0 || os.SameFile(currentRaw, currentCopy) {
-		return errors.New("the original or processed file changed; cleanup was skipped")
+		return fault.Wrap("the original or processed file changed or could not be checked; cleanup was skipped", errors.Join(rawErr, copyErr))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Remove(source); err != nil {
-		return errors.New("the original FLV could not be deleted")
+		return fault.Wrap("the original FLV could not be deleted; check file access and folder permissions", err)
 	}
 	return nil
 }

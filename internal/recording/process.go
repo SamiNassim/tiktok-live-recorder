@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/ffmpeg"
 	"tiktok-live-recorder/internal/state"
 )
@@ -101,22 +102,22 @@ func OutputArgs(raw string) ([]string, error) {
 func Process(parent context.Context, source string, cfg state.Config) (string, error) {
 	args, err := OutputArgs(cfg.FFmpegArgs)
 	if err != nil {
-		return "", err
+		return "", fault.Action("could not create the processed copy; check the custom FFmpeg output options. Raw FLV kept", err)
 	}
 	path, err := ffmpeg.Find(cfg.FFmpegPath)
 	if err != nil {
-		return "", err
+		return "", fault.Action("could not create the processed copy; install or select FFmpeg in Settings. Raw FLV kept", err)
 	}
 	if cfg.OutputExtension != "mp4" && cfg.OutputExtension != "mkv" && cfg.OutputExtension != "ts" {
-		return "", errors.New("invalid processed output format")
+		return "", fault.Action("could not create the processed copy; choose a supported output format in Settings. Raw FLV kept", nil)
 	}
 	target := strings.TrimSuffix(source, filepath.Ext(source)) + ".processed." + cfg.OutputExtension
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return "", errors.New("the processed output already exists or cannot be checked; the raw FLV was kept")
+		return "", fault.Action("the processed output already exists or cannot be checked; raw FLV kept", err)
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(target), ".processing-")
 	if err != nil {
-		return "", errors.New("a processing folder could not be created; the raw FLV was kept")
+		return "", fault.Action("could not create a processing folder; check disk space and folder permissions. Raw FLV kept", err)
 	}
 	defer os.RemoveAll(stage)
 	staged := filepath.Join(stage, "recording."+cfg.OutputExtension)
@@ -134,10 +135,10 @@ func Process(parent context.Context, source string, cfg state.Config) (string, e
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	if err = cmd.Run(); err != nil {
-		return "", errors.New("FFmpeg post-processing failed; the raw FLV was kept. Check your output options and FFmpeg installation")
+		return "", processingFailure(ctx.Err(), err, stderr.String(), "create the processed copy")
 	}
 	if info, err := os.Stat(staged); err != nil || info.Size() == 0 {
-		return "", errors.New("FFmpeg produced no processed copy; the raw FLV was kept")
+		return "", fault.Action("FFmpeg produced no processed copy; raw FLV kept", err)
 	}
 	if cfg.DeleteRawAfterProcessing {
 		// Read every output packet before allowing cleanup. Stream copying
@@ -146,27 +147,30 @@ func Process(parent context.Context, source string, cfg state.Config) (string, e
 		configureCommand(verify)
 		verify.Stderr = &stderr
 		if err := verify.Run(); err != nil {
-			return "", errors.New("the processed copy could not be verified; the raw FLV was kept")
+			return "", processingFailure(ctx.Err(), err, stderr.String(), "verify the processed copy")
 		}
 	}
 	if err := syncProcessedCopy(staged, false); err != nil {
-		return "", errors.New("the processed copy could not be safely saved; the raw FLV was kept")
+		return "", fault.Action("the processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", processingFailure(err, err, "", "publish the processed copy")
 	}
 	// A hard link publishes the finished file without replacing an existing
 	// destination. Filesystems without hard links use an exclusive copy instead.
 	if err := os.Link(staged, target); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return "", errors.New("the processed output already exists; the raw FLV was kept")
+			return "", fault.Action("the processed output already exists; raw FLV kept", err)
 		}
 		if err := copyProcessedExclusive(ctx, staged, target); err != nil {
-			return "", errors.New("the processed copy could not be published; the raw FLV was kept")
+			if ctx.Err() != nil {
+				return "", processingFailure(ctx.Err(), err, "", "publish the processed copy")
+			}
+			return "", fault.Action("could not publish the processed copy; check disk space and folder permissions. Raw FLV kept", err)
 		}
 	}
 	if err := syncProcessedCopy(target, cfg.DeleteRawAfterProcessing); err != nil {
-		return "", errors.New("the processed copy could not be safely saved; the raw FLV was kept")
+		return "", fault.Action("the published processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
 	return target, nil
 }

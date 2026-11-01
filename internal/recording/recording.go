@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/state"
 	"tiktok-live-recorder/internal/tiktok"
 )
@@ -64,11 +64,11 @@ func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg
 	}
 	path := recordingPath(s, cfg, stamp, hex.EncodeToString(suffix[:]))
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, fmt.Errorf("create recording folder: %w", err)
+		return nil, fault.Action("could not create the recording folder; check disk space and folder permissions", err)
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("create raw FLV: %w", err)
+		return nil, fault.Action("could not create the raw FLV file; check disk space and folder permissions", err)
 	}
 	h := &Handle{path: path, started: stamp, cancel: cancel, done: make(chan struct{})}
 	go func() {
@@ -85,9 +85,18 @@ func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg
 		}
 		syncErr, closeErr := file.Sync(), file.Close()
 		transportEnded := count > 0 && errors.Is(copyErr, io.ErrUnexpectedEOF) && !writer.failed && syncErr == nil && closeErr == nil
+		if copyErr != nil && !writer.failed {
+			copyErr = fault.Wrap("the video connection was interrupted: "+fault.Reason(copyErr), copyErr)
+		}
+		if syncErr != nil {
+			syncErr = fault.Action("could not synchronize the raw FLV to disk; check disk space and drive connectivity", syncErr)
+		}
+		if closeErr != nil {
+			closeErr = fault.Action("could not close the raw FLV file safely; check the recording drive", closeErr)
+		}
 		err := errors.Join(copyErr, syncErr, closeErr)
 		if count == 0 && err == nil {
-			err = errors.New("no FLV bytes were received")
+			err = fault.Wrap("the video connection ended before any FLV data was received", nil)
 		}
 		r := Result{Path: path, Bytes: count, EndedAt: time.Now(), Err: err, TransportEnded: transportEnded}
 		h.result = r
@@ -112,8 +121,14 @@ type syncWriter struct {
 
 func (w *syncWriter) Write(p []byte) (int, error) {
 	n, err := w.file.Write(p)
+	if err != nil {
+		err = fault.Action("could not write incoming video to the raw FLV file; check disk space and folder permissions", err)
+	}
 	if err == nil && time.Since(w.last) >= time.Second {
 		err = w.file.Sync()
+		if err != nil {
+			err = fault.Action("could not synchronize incoming video to disk; check disk space and drive connectivity", err)
+		}
 		w.last = time.Now()
 	}
 	if err != nil {
