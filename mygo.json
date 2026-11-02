@@ -1,9 +1,18 @@
 {
-  "name": "TikTok Live Recorder",
-  "identifier": "app.tiktok-live-recorder.desktop",
-  "version": "0.1.0",
   "icon": "internal/assets/icon.png",
+  "identifier": "app.tiktok-live-recorder.desktop",
+  "linux": {
+    "categories": [
+      "AudioVideo",
+      "Video"
+    ],
+    "webview": false
+  },
+  "name": "TikTok Live Recorder",
   "out": "build",
-  "resources": ["CREDITS.md", "LICENSE"],
-  "linux": { "categories": ["AudioVideo", "Video"], "webview": false }
+  "resources": [
+    "CREDITS.md",
+    "LICENSE"
+  ],
+  "version": "0.1.1"
 }
