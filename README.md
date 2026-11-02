@@ -1,10 +1,10 @@
-# TikTok Live Recorder
-
-<p align="center">
+<h1 align="center">
   <a href="https://github.com/SamiNassim/tiktok-live-recorder/releases">
-    <img src="internal/assets/icon.png" alt="TikTok Live Recorder icon" width="100" height="100">
+    <img src="internal/assets/icon.png" alt="TikTok Live Recorder icon" width="128" height="128">
   </a>
-</p>
+  <br>
+  TikTok Live Recorder
+</h1>
 
 A native desktop app for automatically recording TikTok livestreams on macOS,
 Windows, and Linux. Written in Go with mygo NativeUI: no web frontend, emulator,
