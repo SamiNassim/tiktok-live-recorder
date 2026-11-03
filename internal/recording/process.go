@@ -123,15 +123,21 @@ func Process(parent context.Context, source string, cfg state.Config) (string, e
 	staged := filepath.Join(stage, "recording."+cfg.OutputExtension)
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
+	input, err := processingInput(ctx, source)
+	if err != nil {
+		return "", fault.Action("could not read the raw FLV for processing; raw FLV kept", err)
+	}
+	defer input.Close()
 	argv := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-n"}
 	if cfg.DeleteRawAfterProcessing {
 		argv = append(argv, "-xerror")
 	}
-	argv = append(argv, "-i", source)
+	argv = append(argv, "-i", "pipe:0")
 	argv = append(argv, args...)
 	argv = append(argv, staged)
 	cmd := exec.CommandContext(ctx, path, argv...)
 	configureCommand(cmd)
+	cmd.Stdin = input
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	if err = cmd.Run(); err != nil {
@@ -141,9 +147,9 @@ func Process(parent context.Context, source string, cfg state.Config) (string, e
 		return "", fault.Action("FFmpeg produced no processed copy; raw FLV kept", err)
 	}
 	if cfg.DeleteRawAfterProcessing {
-		// Read every output packet before allowing cleanup. Stream copying
-		// validates the container without re-encoding or decoding a long live.
-		verify := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "null", "-")
+		// Packet copying cannot detect missing decoder settings. Decode the
+		// complete copy before allowing cleanup, without saving re-encoded media.
+		verify := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
 		configureCommand(verify)
 		verify.Stderr = &stderr
 		if err := verify.Run(); err != nil {
