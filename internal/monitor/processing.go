@@ -28,7 +28,7 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 		var original os.FileInfo
 		var originalErr error
 		if deleteRaw {
-			original, originalErr = os.Lstat(source)
+			original, originalErr = snapshotFile(source)
 		}
 		e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
 		path, err := process(e.ctx, source, cfg)
@@ -38,7 +38,7 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 		}
 		var copyInfo os.FileInfo
 		if err == nil {
-			copyInfo, err = os.Lstat(path)
+			copyInfo, err = snapshotFile(path)
 			if err != nil || !copyInfo.Mode().IsRegular() || copyInfo.Size() == 0 {
 				err = fault.Action("the processed copy is missing or invalid; raw FLV kept", err)
 			}
@@ -77,14 +77,46 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 	})
 }
 
+// snapshotFile captures a regular file's identity through its open handle.
+// On Windows, Lstat loads file IDs lazily when SameFile is called; after a
+// replacement that could identify the new file instead of the original one.
+// Nonregular paths are returned without opening them so callers reject links
+// and devices without following them or blocking on a pipe.
+func snapshotFile(path string) (os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() {
+		return before, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, statErr := f.Stat()
+	closeErr := f.Close()
+	if err := errors.Join(statErr, closeErr); err != nil {
+		return nil, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || !after.Mode().IsRegular() ||
+		!os.SameFile(info, after) || before.Size() != info.Size() ||
+		!before.ModTime().Equal(info.ModTime()) || after.Size() != info.Size() ||
+		!after.ModTime().Equal(info.ModTime()) {
+		return nil, errors.New("the recording changed while its file identity was being checked")
+	}
+	return info, nil
+}
+
 // removeProcessedRaw rechecks both file identities immediately before unlinking
 // only the original FLV. Replacements, edits, links and cancellation retain it.
 func removeProcessedRaw(ctx context.Context, source, processed string, original, copyInfo os.FileInfo) error {
 	if original == nil || copyInfo == nil || !strings.EqualFold(filepath.Ext(source), ".flv") {
 		return errors.New("the original FLV could not be identified safely")
 	}
-	currentRaw, rawErr := os.Lstat(source)
-	currentCopy, copyErr := os.Lstat(processed)
+	currentRaw, rawErr := snapshotFile(source)
+	currentCopy, copyErr := snapshotFile(processed)
 	unchanged := func(before, after os.FileInfo) bool {
 		return before.Mode().IsRegular() && after.Mode().IsRegular() && os.SameFile(before, after) &&
 			before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())

@@ -44,11 +44,11 @@ func TestRawCleanupRechecksFilesAndCancellation(t *testing.T) {
 					t.Skip("symlinks unavailable", err)
 				}
 			}
-			original, err := os.Lstat(raw)
+			original, err := snapshotFile(raw)
 			if err != nil {
 				t.Fatal(err)
 			}
-			copyInfo, err := os.Lstat(processed)
+			copyInfo, err := snapshotFile(processed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -66,6 +66,14 @@ func TestRawCleanupRechecksFilesAndCancellation(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(path, []byte("original media"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				before := original
+				if name == "copy replaced" {
+					before = copyInfo
+				}
+				// Equal timestamps and sizes must not hide a different file ID.
+				if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
 					t.Fatal(err)
 				}
 			case "raw edited", "copy edited", "empty copy":
@@ -157,10 +165,17 @@ func TestProcessingCleanupHonorsErrorsAndSettingsChanges(t *testing.T) {
 						return "", err
 					}
 				case "raw replaced":
+					before, err := os.Stat(raw)
+					if err != nil {
+						return "", err
+					}
 					if err := os.Rename(raw, raw+".saved"); err != nil {
 						return "", err
 					}
-					if err := os.WriteFile(raw, []byte("replacement media"), 0600); err != nil {
+					if err := os.WriteFile(raw, []byte("original media"), 0600); err != nil {
+						return "", err
+					}
+					if err := os.Chtimes(raw, before.ModTime(), before.ModTime()); err != nil {
 						return "", err
 					}
 				}
