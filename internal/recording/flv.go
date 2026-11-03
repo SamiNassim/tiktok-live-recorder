@@ -123,7 +123,7 @@ func (r *processingFLV) next() error {
 type flvVideo struct {
 	codec             string
 	lengthSize        int
-	parameters        []byte // Four-byte length-prefixed parameter sets.
+	parameters        []byte // Annex B parameter sets for FFmpeg's processing input.
 	pendingParameters bool
 }
 
@@ -170,9 +170,11 @@ func (v *flvVideo) appendTag(dst, tag []byte) ([]byte, bool, error) {
 			// Their current contents are preserved in subsequent keyframes.
 			return dst, false, nil
 		}
-		start := len(dst)
-		dst = append(dst, tag...)
-		dst[start+offset+lengthOffset] |= 3
+		// The private FFmpeg pipe carries Annex B headers and packets. Older
+		// HEVC transport filters otherwise insert stale initial parameter sets
+		// immediately before a new-resolution picture's slice data.
+		dst = append(dst, tag[:offset]...)
+		dst = append(dst, v.parameters...)
 		return dst, true, nil
 	}
 	if v.codec == "" || len(tag) < offset {
@@ -194,7 +196,7 @@ func (v *flvVideo) appendTag(dst, tag []byte) ([]byte, bool, error) {
 		if uint64(size) > uint64(len(data)) {
 			return nil, false, errors.New("the raw FLV contains a partial video NAL unit")
 		}
-		dst = binary.BigEndian.AppendUint32(dst, size)
+		dst = append(dst, 0, 0, 0, 1)
 		dst = append(dst, data[:size]...)
 		data = data[size:]
 	}
@@ -216,7 +218,7 @@ func videoParameters(codec string, config []byte) (int, []byte, error) {
 			if size == 0 || size > len(data) {
 				return nil, io.ErrUnexpectedEOF
 			}
-			parameters = binary.BigEndian.AppendUint32(parameters, uint32(size))
+			parameters = append(parameters, 0, 0, 0, 1)
 			parameters = append(parameters, data[:size]...)
 			data = data[size:]
 		}

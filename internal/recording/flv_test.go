@@ -92,8 +92,14 @@ func TestProcessingInputUsesCurrentParametersAndNormalizesNALLengths(t *testing.
 					if err != nil || keep != (index == 0) {
 						t.Fatal("sequence header was not handled", index, keep, err)
 					}
-					if index == 0 && out[len(header(0, true))+map[string]int{"h264": 4, "hevc": 21}[codec]]&3 != 3 {
-						t.Fatal("initial configuration does not use four-byte NAL lengths")
+					if index == 0 {
+						want := append(header(0, true), 0, 0, 0, 1, parameter)
+						if codec == "h264" {
+							want = append(want, 0, 0, 0, 1, 0x68)
+						}
+						if !bytes.Equal(out, want) {
+							t.Fatal("initial decoder parameters are not Annex B", out)
+						}
 					}
 					for frame, key := range []bool{false, true, false} {
 						for packetIndex, packet := range []byte{1, 3} {
@@ -112,7 +118,7 @@ func TestProcessingInputUsesCurrentParametersAndNormalizesNALLengths(t *testing.
 									want = append(want, 0, 0, 0, 1, 0x68)
 								}
 							}
-							want = append(want, 0, 0, 0, 2, 0x65, 0x42)
+							want = append(want, 0, 0, 0, 1, 0x65, 0x42)
 							if err != nil || !keep || !bytes.Equal(out, want) {
 								t.Fatalf("lost current parameters, composition offset, or encoded NAL: %x != %x (%v)", out, want, err)
 							}

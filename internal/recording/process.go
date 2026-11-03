@@ -149,11 +149,18 @@ func Process(parent context.Context, source string, cfg state.Config) (string, e
 	if cfg.DeleteRawAfterProcessing {
 		// Packet copying cannot detect missing decoder settings. Decode the
 		// complete copy before allowing cleanup, without saving re-encoded media.
-		verify := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
+		verify := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-err_detect", "explode", "-abort_on", "empty_output+empty_output_stream", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
 		configureCommand(verify)
-		verify.Stderr = &stderr
-		if err := verify.Run(); err != nil {
-			return "", processingFailure(ctx.Err(), err, stderr.String(), "verify the processed copy")
+		var decodeErrors tailBuffer
+		verify.Stderr = &decodeErrors
+		verifyErr := verify.Run()
+		// Some older FFmpeg releases return zero despite decoder errors, even
+		// with -xerror. At error log level, stderr must also remain empty.
+		if verifyErr == nil && decodeErrors.String() != "" {
+			verifyErr = errors.New("FFmpeg reported video or audio decoding errors")
+		}
+		if verifyErr != nil {
+			return "", processingFailure(ctx.Err(), verifyErr, decodeErrors.String(), "verify the processed copy")
 		}
 	}
 	if err := syncProcessedCopy(staged, false); err != nil {
