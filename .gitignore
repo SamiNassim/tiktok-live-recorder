@@ -1,7 +1,8 @@
 AGENTS.md
 /build/
 /design/
-/assets/
+/assets/*
+!/assets/screenshot.webp
 .mygo/
 .local/
 *.log

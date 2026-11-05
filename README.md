@@ -6,14 +6,21 @@
   TikTok Live Recorder
 </h1>
 
+<p align="center">
+  <a href="https://awesomemygo.dev/apps/tiktok-live-recorder"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+</p>
+
 A native desktop app for automatically recording TikTok livestreams on macOS,
 Windows, and Linux. Written in Go with mygo NativeUI: no web frontend, emulator,
 or running browser is needed for monitoring and recording.
 
+![TikTok Live Recorder interface with demo data](assets/screenshot.webp)
+
 ## Download and open
 
-Download the version for your operating system and processor from this repository's
-**Releases** page. You do not need Go to run the app.
+Download the app from [Releases](https://github.com/SamiNassim/tiktok-live-recorder/releases).
+The macOS app supports both Apple silicon and Intel Macs; Windows and Linux
+downloads are for x64. You do not need Go to run the app.
 
 Releases do not use verified Apple or Windows publisher certificates, and macOS
 builds are not notarized by Apple. Your computer may warn you on first launch.
@@ -56,10 +63,11 @@ chmod +x tiktok-live-recorder
 
 1. Open the app and choose your recording folder in **Settings**.
    If FFmpeg is missing, accept the guided setup to create MKV playback copies.
+   Click **Save settings** after making changes.
 2. Click **Add streamer** and enter a username, `@username`, or a profile/live URL
    such as `https://www.tiktok.com/@username/live`.
-3. Leave monitoring enabled. The app checks the queue and starts recording when
-   it finds a playable live stream.
+3. Leave monitoring enabled and keep the app running. The app checks the queue
+   and starts recording when it finds a playable live stream.
 
 Public streams can work without an account. If TikTok requires login or limits
 access, add a signed-in browser session as described below. Authentication does
@@ -76,10 +84,10 @@ app rather than using your personal account.**
 4. In the app, open **Settings → TikTok account**, click **Paste cookie**, then
    **Validate account** and **Save settings**.
 
-
 Successful validation displays your account's name and username. If the session
 expires, sign in again and copy a fresh sessionid value. Clear the field and save
-to return to anonymous requests.
+to return to anonymous requests. Click the account indicator in the lower-left
+corner to jump back to these settings.
 
 Cookies grant account access. They are stored locally in `config.json`, not sent
 to external signing services or written to application logs. Do not share your
@@ -95,9 +103,11 @@ playback copy by default**, without re-encoding or quality loss.
 
 - The highest-quality offered source is preferred, including HEVC. Origin
   renditions take priority; playback compatibility never causes an automatic
-  downgrade to a lower-quality H.264 rendition. The stream is never re-encoded.
+  downgrade to a lower-quality H.264 rendition. Raw recording never re-encodes
+  the stream; custom processing options affect only the separate playback copy.
 - Filenames start with `@username`. Streamer folders start with `@username`,
-  followed by the display name. Existing files and folders are not renamed.
+  followed by the display name. Separate streamer folders can be disabled in
+  Settings. Existing files and folders are not renamed.
 - Raw recording does **not** require FFmpeg.
 - Files are synchronized to disk periodically and kept after interruptions.
   This reduces data loss; it cannot guarantee recovery from disk failure, power
@@ -107,6 +117,9 @@ playback copy by default**, without re-encoding or quality loss.
 - The **Recordings** page shows local history and can reveal files in your file
   manager. Finalized entries disappear when both the raw file and any processed
   copy are deleted outside the app and the recording drive is available.
+- Right-click a recording to open it, copy its path, or **Remove from history**.
+  **Clear history…** removes all completed entries. These actions keep the files
+  on disk and leave active recordings in the list.
 - Removing a streamer never deletes existing recordings.
 
 ### Playback copies and FFmpeg
@@ -128,11 +141,18 @@ off also turns cleanup off. This applies to new recording jobs, not existing fil
 **Cleanup permanently removes the untouched source. Leave it off if you need
 that source, especially when custom output options discard tracks or quality.**
 
-If an HEVC FLV plays audio but no video in your player, an MKV copy with
-`-map 0:v? -map 0:a? -c copy` preserves the codecs and quality while using a more
-widely supported container. It also gives live timestamps a normal playback
-timeline for seeking. The original FLV remains unchanged. Copies require roughly
-as much additional disk space as their raw recordings with the default options.
+Prefer the processed MKV for playback and seeking. Some players do not support
+TikTok's HEVC-in-FLV format well, and a raw live stream can report a misleading
+duration or seek poorly. The default `-map 0:v? -map 0:a? -c copy` keeps the
+original codecs and quality in an MKV with a normal playback timeline.
+
+For H.264 and HEVC streams, processing preserves updated video settings when
+the resolution changes, such as when a guest joins. This avoids playback and
+seeking problems caused by losing those settings during copying. It does not
+alter the original FLV or repair footage missing from the source. A player still
+needs to support the recorded video codec.
+Copies require roughly as much additional disk space as their raw recordings
+with the default options; custom encoding options can change quality and size.
 
 When a copy is ready, the **Recordings** page shows it and uses it for **Open
 recording**, **Show in folder**, and **Copy file path**. The right-click menu also
@@ -140,8 +160,8 @@ provides separate actions for the original FLV while it is retained. A recording
 stays in history after automatic FLV cleanup. Until a copy is ready, or if
 processing is disabled or fails, the raw file remains available.
 
-The editable field contains **output options only**. The app chooses the input
-raw file, the output path, and the FFmpeg executable; it never runs a shell.
+The editable field contains **output options only**. The app manages the recording
+input, output path, and FFmpeg executable; it never runs a shell.
 
 Examples:
 
@@ -198,6 +218,9 @@ Use the row's **…** menu:
   is preserved.
 - Rename the streamer or change its priority.
 
+You can also right-click anywhere on a streamer row. The list defaults to
+**Last recorded**; search, filters, and sorting stay in place when switching tabs.
+
 Disabling monitoring globally stops new checks, but does not interrupt current
 recordings. Changes in Settings take effect after **Save settings**.
 
@@ -211,6 +234,8 @@ can change. An account is not a guarantee that every stream will be recordable.
 Settings include appearance, the recordings folder, polling intervals, account
 cookies, optional FFmpeg processing, and desktop recording-start notifications.
 Notifications can be disabled and may also require OS notification permission.
+An **Unsaved settings** warning remains visible until you save or restore the
+previous values. Successful saves display a temporary confirmation.
 
 The configuration directory contains:
 
@@ -218,7 +243,10 @@ The configuration directory contains:
 - `data.json`: streamers and recording history; no database is used.
 - `tiktok-live-recorder.log`, `.log.1`, `.log.2`: rotating logs, up to approximately
   15 MB total. The UI retains up to 5,000 entries and filters before displaying
-  the virtualized table, newest first.
+  the virtualized table, newest first. Search or filter by level, then scroll
+  to see older matching entries.
+
+**Clear view** clears the visible log history without deleting the log files.
 
 Open this directory from Settings or Logs. Its default location is the OS user
 configuration directory under `TikTok Live Recorder`:
@@ -230,6 +258,24 @@ configuration directory under `TikTok Live Recorder`:
 
 Configuration updates are written atomically. Corrupt files are not silently
 overwritten. To use another directory, pass `-config-dir /path/to/config`.
+
+## Troubleshooting
+
+- **Live on TikTok, but no recording:** check the row status and **Logs**. For
+  login-restricted streams, validate a fresh sessionid and save it. Your account
+  must be able to watch the live; a valid session cannot bypass access rules.
+- **Reconnecting:** the video connection closed and the app is checking for a
+  resumed stream. This alone does not mean the broadcaster ended the live.
+  Received FLV data is kept, and a resumed connection starts a new file.
+- **Audio plays but video is missing, or seeking looks wrong:** try the
+  `.processed.mkv` instead of the raw FLV. Keep processing enabled for future
+  recordings. Previously created copies are not automatically rebuilt on update.
+- **Processing failed:** the raw FLV is kept. Check FFmpeg availability, disk
+  space, and custom output options. With automatic cleanup enabled, a copy must
+  also pass a complete decoding check before the original can be deleted.
+- **Need more error details:** right-click a log row and choose **Copy diagnostic
+  details**, or open the configuration folder to inspect the rotating log files.
+  Review logs before sharing them; never include account cookies or `config.json`.
 
 ## Building from source
 
@@ -261,6 +307,11 @@ TikTok Live Recorder is an independent project developed for educational purpose
 It is not affiliated with, sponsored by, or endorsed by TikTok or ByteDance.
 Its educational purpose does not grant permission to record or redistribute
 someone else's content.
+
+## Donate
+
+- **ETH:** `0x1739eF0cB6aF1E8188A727B73EDeA9B4aa12187f`
+- **SOL:** `G13EVpg5dK4vKBDth8iC7K1xd2xY9qTVAREbh57JdvaE`
 
 ## Credits
 
