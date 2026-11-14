@@ -94,9 +94,11 @@ func TestLongRecordingClocksRefreshOnlyWhenDisplayedMinutesChange(t *testing.T) 
 func TestLongCheckCountdownSleepsUntilItsDisplayedMinuteChanges(t *testing.T) {
 	a := accountFixture(t)
 	a.snapshot.Polling = true
-	a.snapshot.Rows = []monitor.Row{{Streamer: state.Streamer{ID: "fixture"}, Status: "Offline", NextCheck: time.Now().Add(time.Hour + 30*time.Second)}}
+	a.snapshot.Rows = []monitor.Row{{Streamer: state.Streamer{ID: "fixture"}, Status: "Offline"}}
 	frames := 0
 	tt := ui.NewTester(func(c *ui.Context) { frames++; a.view(c) }, 1050, 650)
+	a.snapshot.Rows[0].NextCheck = tt.Now().Add(time.Hour + 30*time.Second)
+	tt.Frame()
 	before := frames
 	tt.Advance(3 * time.Second)
 	if frames != before {
