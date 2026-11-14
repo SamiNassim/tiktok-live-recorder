@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,7 @@ func OpenSize(dir string, limit int64) (*Log, error) {
 		for sc.Scan() {
 			var e Entry
 			if json.Unmarshal(sc.Bytes(), &e) == nil {
+				e.Details = distinctDetails(e.Message, e.Details)
 				l.keep(e)
 				l.sequence = max(l.sequence, e.Sequence)
 			}
@@ -97,7 +99,7 @@ func (l *Log) WriteError(level, id, message string, cause error) {
 	if len(message) > 16000 {
 		message = message[:16000] + " [truncated]"
 	}
-	details := fault.Details(cause)
+	details := distinctDetails(message, fault.Details(cause))
 	if len(details) > 16000 {
 		details = details[:16000] + " [truncated]"
 	}
@@ -120,6 +122,32 @@ func (l *Log) WriteError(level, id, message string, cause error) {
 		fmt.Fprintln(os.Stderr, "write log:", err)
 	}
 }
+
+// Older log entries include the readable error as a prefix of the cause.
+// Strip it when the summary already contains it, including summaries with
+// operation prefixes or retry instructions.
+func distinctDetails(message, details string) string {
+	if details == "" || includesSummary(message, details) {
+		return ""
+	}
+	for end := strings.LastIndex(details, ": "); end > 0; end = strings.LastIndex(details[:end], ": ") {
+		if includesSummary(message, details[:end]) {
+			return strings.TrimSpace(details[end+2:])
+		}
+	}
+	return details
+}
+
+func includesSummary(message, summary string) bool {
+	for before, after, found := strings.Cut(message, summary); found; before, after, found = strings.Cut(after, summary) {
+		if (before == "" || strings.HasSuffix(before, ": ")) &&
+			(after == "" || strings.ContainsRune(".;!?\n", rune(after[0]))) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *Log) rotate() error {
 	if err := l.file.Close(); err != nil {
 		return err

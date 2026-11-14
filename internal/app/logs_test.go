@@ -2,19 +2,20 @@ package app
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+
+	"tiktok-live-recorder/internal/fault"
 )
 
 func TestLogDetailsCanBeCopiedAndSearchedWithoutClutteringMessage(t *testing.T) {
 	a := accountFixture(t)
 	a.page = "logs"
-	a.log.WriteError("WARN", "demo", "Stream setup timed out; queued to retry", context.DeadlineExceeded)
+	a.log.WriteError("WARN", "demo", "Stream setup failed: Stream setup timed out. Queued to retry.", fault.Wrap("Stream setup timed out", context.DeadlineExceeded))
 	a.refresh()
 	tt := ui.NewTester(a.view, 1400, 900)
-	message, ok := tt.Find("Stream setup timed out; queued to retry")
+	message, ok := tt.Find("Stream setup failed: Stream setup timed out. Queued to retry.")
 	if !ok || tt.HasText("context deadline exceeded") {
 		t.Fatal("diagnostic cause leaked into the main table or summary was hidden")
 	}
@@ -22,8 +23,8 @@ func TestLogDetailsCanBeCopiedAndSearchedWithoutClutteringMessage(t *testing.T) 
 	if err := tt.ChooseMenuItem("Copy diagnostic details"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(tt.Clipboard(), "context deadline exceeded") || !strings.Contains(tt.Clipboard(), "Stream setup timed out") {
-		t.Fatal("copied diagnostics lost their readable context")
+	if tt.Clipboard() != "context deadline exceeded" {
+		t.Fatal("copied diagnostics should contain only the underlying cause")
 	}
 	a.logQuery = "deadline exceeded"
 	tt.Frame()

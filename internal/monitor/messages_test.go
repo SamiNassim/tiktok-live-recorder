@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestStartupLogsExplainOperationAndQueuedRetry(t *testing.T) {
-	for _, cause := range []error{context.DeadlineExceeded, fault.Action("recording folder is not writable", nil)} {
+	for _, cause := range []error{context.DeadlineExceeded, fault.Action("recording folder is not writable", os.ErrPermission)} {
 		store, log := fixture(t)
 		client := &fakeClient{}
 		client.live.Store(true)
@@ -24,10 +25,12 @@ func TestStartupLogsExplainOperationAndQueuedRetry(t *testing.T) {
 			for _, entry := range log.Entries() {
 				if strings.HasPrefix(entry.Message, "Could not start recording:") {
 					level := "WARN"
+					details := context.DeadlineExceeded.Error()
 					if fault.RequiresAction(cause) {
 						level = "ERROR"
+						details = os.ErrPermission.Error()
 					}
-					if entry.Level != level || !strings.Contains(entry.Message, "Next check queued in 15s") || entry.Details == "" || strings.Contains(entry.Message, "context deadline exceeded") {
+					if entry.Level != level || !strings.Contains(entry.Message, "Next check queued in 15s") || entry.Details != details || strings.Contains(entry.Message, details) {
 						t.Error("startup message lost severity, retry or readable context", entry)
 					}
 					return true
@@ -48,8 +51,11 @@ func TestRateLimitWarningIsNotDuplicatedAndIncludesActualQueueDelay(t *testing.T
 	for _, entry := range e.log.Entries() {
 		if entry.Level == "WARN" {
 			count++
-			if !strings.Contains(entry.Message, "Next check queued in 5m0s") || entry.Details == "" {
+			if !strings.Contains(entry.Message, "Next check queued in 5m0s") {
 				t.Fatal("rate-limit warning omitted its actual backoff", entry)
+			}
+			if entry.Details != "" {
+				t.Fatal("rate-limit diagnostics repeated the summary", entry)
 			}
 		}
 	}

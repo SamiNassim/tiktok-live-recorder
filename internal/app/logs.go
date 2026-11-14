@@ -10,6 +10,6 @@ func logMenu(m *ui.Menu, entry logging.Entry, services ui.Services) {
 		services.WriteClipboard(entry.Message)
 	}
 	if m.Item("Copy diagnostic details").Disabled(entry.Details == "").Chosen() {
-		services.WriteClipboard(entry.Message + "\n\n" + entry.Details)
+		services.WriteClipboard(entry.Details)
 	}
 }

@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,36 @@ import (
 
 	"tiktok-live-recorder/internal/fault"
 )
+
+func TestLegacyDiagnosticDetailsOmitRepeatedSummary(t *testing.T) {
+	dir := t.TempDir()
+	const summary = "Could not complete the sample operation. Original file kept"
+	entries := []Entry{
+		{Message: "Sample job failed: " + summary, Details: summary + ": unexpected tag at byte 1024"},
+		{Message: "Sample job failed: " + summary, Details: summary},
+	}
+	f, err := os.Create(filepath.Join(dir, "tiktok-live-recorder.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := json.NewEncoder(f).Encode(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	got := l.Entries()
+	if len(got) != 2 || got[0].Details != "unexpected tag at byte 1024" || got[1].Details != "" {
+		t.Fatal("old entries should only show distinct details", got)
+	}
+}
 
 func TestDiagnosticDetailsSurviveRotationAndReloadSeparately(t *testing.T) {
 	dir := t.TempDir()
