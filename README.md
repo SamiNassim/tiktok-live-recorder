@@ -62,7 +62,7 @@ chmod +x tiktok-live-recorder
 ## Getting started
 
 1. Open the app and choose your recording folder in **Settings**.
-   If FFmpeg is missing, accept the guided setup to create MKV playback copies.
+   If FFmpeg is missing, accept the guided setup to create MP4 playback copies.
    Click **Save settings** after making changes.
 2. Click **Add streamer** and enter a username, `@username`, or a profile/live URL
    such as `https://www.tiktok.com/@username/live`.
@@ -98,8 +98,8 @@ configuration file or paste your cookies into issue reports.
 Every recording starts with the **original HTTP-FLV byte stream**, saved directly
 to a `.flv` file. The app does not remux it, re-encode it, repair it, or rewrite
 its timestamps. This preserves the source even when another container would lose
-information or expose artifacts. **New installations also create a separate MKV
-playback copy by default**, without re-encoding or quality loss.
+information or expose artifacts. The app also creates a separate MP4 playback
+copy by default.
 
 - The highest-quality offered source is preferred, including HEVC. Origin
   renditions take priority; playback compatibility never causes an automatic
@@ -125,34 +125,23 @@ playback copy by default**, without re-encoding or quality loss.
 ### Playback copies and FFmpeg
 
 **Settings → Recording → Create a processed copy with FFmpeg** is enabled by
-default for new installations. After each raw recording ends, the app creates
-an additional `.processed.mkv` file in the background. Saved preferences are
-respected when updating. You can disable copies, choose MP4 or TS, or customize
-the output options. **The original FLV is kept by default, and is always kept if
-processing fails or is canceled.**
+default. After the recording ends, the app creates a separate
+`.processed.mp4` file in the background and decodes it from start to finish
+before making it available for playback.
 
-To save disk space, optionally enable **Delete original FLV after processing**
-in the same section. Processing must be enabled. The app checks the entire
-processed file with FFmpeg, flushes it to disk, and saves its history entry
-before deleting the FLV. Failed checks, changed files, interrupted processing,
-or a failure to save the playback-copy entry keep the original. Turning processing
-off also turns cleanup off. This applies to new recording jobs, not existing files.
+Compatible streams are copied without re-encoding. If the recording switches
+between HEVC and H.264, the app automatically makes a continuous H.264 MP4
+with AAC audio when audio is present. Re-encoding takes longer and can change
+picture quality. FFmpeg needs an H.264 encoder such as libx264 for this step.
+HEVC stream copies still require a player that supports HEVC. Existing MKV and
+TS copies remain accessible from recording history.
 
-**Cleanup permanently removes the untouched source. Leave it off if you need
-that source, especially when custom output options discard tracks or quality.**
-
-Prefer the processed MKV for playback and seeking. Some players do not support
-TikTok's HEVC-in-FLV format well, and a raw live stream can report a misleading
-duration or seek poorly. The default `-map 0:v? -map 0:a? -c copy` keeps the
-original codecs and quality in an MKV with a normal playback timeline.
-
-For H.264 and HEVC streams, processing preserves updated video settings when
-the resolution changes, such as when a guest joins. This avoids playback and
-seeking problems caused by losing those settings during copying. It does not
-alter the original FLV or repair footage missing from the source. A player still
-needs to support the recorded video codec.
-Copies require roughly as much additional disk space as their raw recordings
-with the default options; custom encoding options can change quality and size.
+**The original FLV is kept by default.** If you enable **Delete original FLV
+after processing**, the app verifies the copy, flushes it to disk, and saves
+its history entry before removing the FLV. It keeps the original if automatic
+re-encoding was needed, if processing fails or is canceled, or if cleanup
+cannot safely complete. Turning processing off also turns cleanup off.
+Custom output options can discard tracks or change quality.
 
 When a copy is ready, the **Recordings** page shows it and uses it for **Open
 recording**, **Show in folder**, and **Copy file path**. The right-click menu also
@@ -160,26 +149,11 @@ provides separate actions for the original FLV while it is retained. A recording
 stays in history after automatic FLV cleanup. Until a copy is ready, or if
 processing is disabled or fails, the raw file remains available.
 
-The editable field contains **output options only**. The app manages the recording
-input, output path, and FFmpeg executable; it never runs a shell.
-
-Examples:
-
-```text
--map 0:v? -map 0:a? -c copy
-```
-
-For an MP4 copy with fast start:
-
-```text
--map 0:v? -map 0:a? -c copy -movflags +faststart
-```
-
-Do not enter `ffmpeg`, `-i`, input/output paths, or placeholders in this field.
-Common mapping, codec, bitrate, filter, and muxing options are supported. Options
-that add inputs, extra outputs, scripts, or file attachments are rejected.
-Explicit `-f` overrides are limited to `matroska`, `mp4`, and `mpegts`; playlist
-and multiple-file formats are not supported.
+Leave **Custom FFmpeg output options** blank for automatic processing.
+The field accepts output options only. The app supplies the input and output
+paths. For example, `-map 0:v? -map 0:a? -c copy -movflags +faststart` copies
+all video and audio streams into the MP4. Options that add inputs, extra
+outputs, scripts, or file attachments are rejected.
 
 FFmpeg is discovered from PATH, a previous per-user installation, or an explicit
 path chosen in Settings. Guided installation downloads a third-party build,
@@ -268,11 +242,11 @@ overwritten. To use another directory, pass `-config-dir /path/to/config`.
   resumed stream. This alone does not mean the broadcaster ended the live.
   Received FLV data is kept, and a resumed connection starts a new file.
 - **Audio plays but video is missing, or seeking looks wrong:** try the
-  `.processed.mkv` instead of the raw FLV. Keep processing enabled for future
+  processed copy instead of the raw FLV. Keep processing enabled for future
   recordings. Previously created copies are not automatically rebuilt on update.
 - **Processing failed:** the raw FLV is kept. Check FFmpeg availability, disk
-  space, and custom output options. With automatic cleanup enabled, a copy must
-  also pass a complete decoding check before the original can be deleted.
+  space, and custom output options. A copy must pass a complete decoding check
+  before it becomes available.
 - **Need more error details:** right-click a log row and choose **Copy diagnostic
   details**, or open the configuration folder to inspect the rotating log files.
   Review logs before sharing them; never include account cookies or `config.json`.
