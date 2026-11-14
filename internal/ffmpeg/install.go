@@ -31,7 +31,7 @@ type release struct{ URL, ChecksumURL, ChecksumFile, Provider string }
 func sourceFor(goos, arch string) (release, error) {
 	if goos == "windows" && arch == "amd64" {
 		base := "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-		name := "ffmpeg-n9.0-latest-win64-lgpl-9.0.zip"
+		name := "ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
 		return release{URL: base + name, ChecksumURL: base + "checksums.sha256", ChecksumFile: name, Provider: "BtbN (GitHub)"}, nil
 	}
 	if (goos == "darwin" || goos == "linux") && (arch == "amd64" || arch == "arm64") {

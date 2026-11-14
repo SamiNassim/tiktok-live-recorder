@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 )
 
@@ -113,7 +114,7 @@ func TestRawCleanupRechecksFilesAndCancellation(t *testing.T) {
 }
 
 func TestProcessingCleanupHonorsErrorsAndSettingsChanges(t *testing.T) {
-	for _, name := range []string{"success", "default keeps raw", "failed", "canceled", "cleanup disabled", "processing disabled", "history cleared", "raw replaced", "empty copy"} {
+	for _, name := range []string{"success", "re-encoded", "default keeps raw", "failed", "canceled", "cleanup disabled", "processing disabled", "history cleared", "raw replaced", "empty copy"} {
 		t.Run(name, func(t *testing.T) {
 			s, log := fixture(t)
 			cfg := s.Config()
@@ -136,16 +137,16 @@ func TestProcessingCleanupHonorsErrorsAndSettingsChanges(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			e := &Engine{store: s, log: log, ctx: ctx, cancel: cancel, processing: make(chan struct{}, 2)}
 			t.Cleanup(e.Close)
-			e.process = func(context.Context, string, state.Config) (string, error) {
+			e.process = func(context.Context, string, state.Config) (recording.ProcessedCopy, error) {
 				if name == "failed" {
-					return "", errors.New("processing failed")
+					return recording.ProcessedCopy{}, errors.New("processing failed")
 				}
 				payload := []byte("verified copy")
 				if name == "empty copy" {
 					payload = nil
 				}
 				if err := os.WriteFile(processed, payload, 0600); err != nil {
-					return "", err
+					return recording.ProcessedCopy{}, err
 				}
 				switch name {
 				case "canceled":
@@ -158,28 +159,28 @@ func TestProcessingCleanupHonorsErrorsAndSettingsChanges(t *testing.T) {
 						latest.PostProcess = false
 					}
 					if err := s.SaveConfig(latest); err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 				case "history cleared":
 					if _, err := s.ClearRecordingHistory(); err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 				case "raw replaced":
 					before, err := os.Stat(raw)
 					if err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 					if err := os.Rename(raw, raw+".saved"); err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 					if err := os.WriteFile(raw, []byte("original media"), 0600); err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 					if err := os.Chtimes(raw, before.ModTime(), before.ModTime()); err != nil {
-						return "", err
+						return recording.ProcessedCopy{}, err
 					}
 				}
-				return processed, nil
+				return recording.ProcessedCopy{Path: processed, Reencoded: name == "re-encoded"}, nil
 			}
 			e.processCopy("demo_creator", raw, cfg)
 			done := make(chan struct{})

@@ -109,9 +109,10 @@ func TestOutputOptionsCannotReplaceInputOrCreateExtraOutput(t *testing.T) {
 	if err != nil || !slices.Contains(got, "title=Processed copy") {
 		t.Fatal(got, err)
 	}
-	for _, format := range []string{"matroska", "mp4", "mpegts"} {
-		if _, err := OutputArgs("-c copy -f " + format); err != nil {
-			t.Fatal("supported single-file format rejected", format, err)
+	for _, format := range []string{"mp4", "matroska", "mpegts"} {
+		args, err := OutputArgs("-c copy -f " + format)
+		if err != nil || !slices.Equal(args, []string{"-c", "copy", "-f", "mp4"}) {
+			t.Fatal("saved format did not resolve to MP4", args, err)
 		}
 	}
 }
@@ -153,7 +154,8 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 	cfg := state.Defaults()
 	cfg.FFmpegPath = path
 	cfg.DeleteRawAfterProcessing = true // Verification still leaves removal to saved history.
-	processed, err := Process(ctx, source, cfg)
+	copy, err := Process(ctx, source, cfg)
+	processed := copy.Path
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +163,7 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sha256.Sum256(before) != sha256.Sum256(after) || processed == source || filepath.Ext(processed) != ".mkv" {
+	if sha256.Sum256(before) != sha256.Sum256(after) || processed == source || filepath.Ext(processed) != ".mp4" || copy.Reencoded {
 		t.Fatal("post-processing modified its raw input")
 	}
 	if info, err := os.Stat(processed); err != nil || info.Size() == 0 {
@@ -201,7 +203,7 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 			t.Fatal("synthetic FLV lacks the live timestamp offset", start, duration)
 		}
 		if start, duration := timing(processed); start < 0 || start > 0.1 || duration < 0.2 || duration > 1 {
-			t.Fatal("MKV retained the inflated live timeline", start, duration)
+			t.Fatal("MP4 retained the inflated live timeline", start, duration)
 		}
 	})
 	t.Run("existing copy is never overwritten", func(t *testing.T) {

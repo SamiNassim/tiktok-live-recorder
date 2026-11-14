@@ -31,7 +31,9 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			original, originalErr = snapshotFile(source)
 		}
 		e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
-		path, err := process(e.ctx, source, cfg)
+		copy, err := process(e.ctx, source, cfg)
+		path := copy.Path
+		deleteRaw = deleteRaw && !copy.Reencoded
 		if e.ctx.Err() != nil {
 			e.log.Write("INFO", id, "Processing interrupted on shutdown; raw FLV is preserved")
 			return
@@ -71,6 +73,8 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			}
 		} else if err != nil {
 			e.log.WriteError("WARN", id, "Processed copy ready; raw FLV kept because cleanup could not complete: "+fault.Reason(err), err)
+		} else if copy.Reencoded {
+			e.log.Write("INFO", id, "Processed MP4 ready after re-encoding; raw FLV kept")
 		} else {
 			e.log.Write("INFO", id, "Processed copy ready; raw FLV kept")
 		}

@@ -72,7 +72,7 @@ type Engine struct {
 	events     chan Event
 	wg         sync.WaitGroup
 	processing chan struct{}
-	process    func(context.Context, string, state.Config) (string, error)
+	process    func(context.Context, string, state.Config) (recording.ProcessedCopy, error)
 }
 
 func New(store *state.Store, log *logging.Log) *Engine {

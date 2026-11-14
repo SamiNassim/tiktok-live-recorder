@@ -22,7 +22,6 @@ func TestUnsavedSettingsTracksEditsAndReverts(t *testing.T) {
 		{"recording folder", func() { a.cfg.RecordingPath += "-new" }},
 		{"notifications", func() { a.cfg.Notifications = !saved.Notifications }},
 		{"output options", func() { a.cfg.FFmpegArgs += " -an" }},
-		{"output format", func() { a.cfg.OutputExtension = "ts" }},
 		{"normal interval", func() { a.normalSeconds++ }},
 		{"low-priority interval", func() { a.coldSeconds++ }},
 		{"request delay", func() { a.delaySeconds++ }},

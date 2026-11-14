@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tiktok-live-recorder/internal/logging"
+	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 	"tiktok-live-recorder/internal/tiktok"
 )
@@ -39,13 +40,13 @@ func TestProcessingCompletionDoesNotRestoreClearedHistory(t *testing.T) {
 	defer e.Close()
 	started, release := make(chan struct{}), make(chan struct{})
 	e.mu.Lock()
-	e.process = func(ctx context.Context, _ string, _ state.Config) (string, error) {
+	e.process = func(ctx context.Context, _ string, _ state.Config) (recording.ProcessedCopy, error) {
 		close(started)
 		select {
 		case <-release:
-			return processed, nil
+			return recording.ProcessedCopy{Path: processed}, nil
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return recording.ProcessedCopy{}, ctx.Err()
 		}
 	}
 	e.processCopy("demo_creator", raw, cfg)

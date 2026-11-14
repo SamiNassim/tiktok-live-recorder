@@ -402,7 +402,7 @@ func (a *application) settings(c *ui.Context) {
 			accountSection.ScrollIntoView()
 		}
 		a.pollingQueue(c)
-		section(c, "Recording", "The highest-quality offered FLV is saved byte for byte, including HEVC. New installations also create a lossless MKV playback copy after recording ends.", func() {
+		section(c, "Recording", "The original stream is recorded byte for byte as FLV.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
 				ui.TextInput(c, &a.cfg.RecordingPath).Grow(1).Label("Recording folder").Height(34)
 				if ui.Button(c, "Choose folder…").Clicked() {
@@ -410,18 +410,14 @@ func (a *application) settings(c *ui.Context) {
 				}
 			})
 			toggle(c, "Separate folder for each streamer", "Folder names start with @username, followed by the display name.", &a.cfg.FolderPerStreamer)
-			toggle(c, "Create a processed copy with FFmpeg", "Enabled by default as an MKV with no re-encoding. Runs after recording ends. The original FLV is kept unless you enable cleanup below.", &a.cfg.PostProcess)
+			toggle(c, "Create a processed copy with FFmpeg", "Creates a verified MP4 after recording ends. Copies compatible streams and automatically re-encodes when needed for continuous playback.", &a.cfg.PostProcess)
 			if !a.cfg.PostProcess {
 				a.cfg.DeleteRawAfterProcessing = false
 			}
 			ui.Column(c).FillWidth().Gap(10).Disabled(!a.cfg.PostProcess).Children(func() {
-				toggle(c, "Delete original FLV after processing", "Off by default. Permanently deletes the FLV only after the copy is verified and saved. Keep it if you need the untouched source, especially with custom output options.", &a.cfg.DeleteRawAfterProcessing)
-				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "Processed copy format").Grow(1)
-					ui.Select(c, &a.cfg.OutputExtension, []string{"mkv", "mp4", "ts"}).Width(130).Label("Processed copy format")
-				})
-				ui.TextInput(c, &a.cfg.FFmpegArgs).FillWidth().Height(36).Label("FFmpeg output options").Placeholder("-map 0:v? -map 0:a? -c copy")
-				ui.Text(c, "Output options only. The app supplies the input and output paths; no command name, -i, or placeholders. Example for MP4: -c copy -movflags +faststart").FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+				toggle(c, "Delete original FLV after processing", "Off by default. Permanently deletes the FLV only after the copy is verified and saved. Keep it if you need the untouched source, especially if the video is re-encoded.", &a.cfg.DeleteRawAfterProcessing)
+				ui.TextInput(c, &a.cfg.FFmpegArgs).FillWidth().Height(36).Label("Custom FFmpeg output options").Placeholder("Automatic")
+				ui.Text(c, "Leave blank for automatic processing. Custom options apply to the final MP4.").FontSize(11).TextColor(t.TextMuted).MaxLines(3)
 			})
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
 				if ui.TextInput(c, &a.cfg.FFmpegPath).Placeholder("ffmpeg (from PATH)").Grow(1).Height(34).Label("FFmpeg executable").Disabled(a.ffmpegInstalling).Changed() {

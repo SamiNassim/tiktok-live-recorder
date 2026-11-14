@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 )
@@ -37,7 +38,7 @@ func processingInput(ctx context.Context, path string) (io.ReadCloser, error) {
 			io.Closer
 		}{io.MultiReader(bytes.NewReader(prefix[:9+n]), f), f}, nil
 	}
-	return &processingFLV{ctx: ctx, source: f, pending: prefix}, nil
+	return &processingFLV{ctx: ctx, source: f, pending: prefix, offset: int64(len(prefix))}, nil
 }
 
 type processingFLV struct {
@@ -46,7 +47,9 @@ type processingFLV struct {
 	pending []byte
 	input   []byte
 	output  []byte
+	offset  int64
 	video   flvVideo
+	clock   flvMediaClock
 	err     error
 }
 
@@ -98,14 +101,22 @@ func (r *processingFLV) next() error {
 		}
 		return nil
 	}
+	offset := r.offset
+	r.offset += int64(len(r.input))
+	payload := r.input[11 : 11+size]
+	if isFLVMedia(header[0], payload) {
+		if err := r.clock.advance(header[0], flvTimestamp(header[:])); err != nil {
+			return fmt.Errorf("FLV tag at byte %d: %w", offset, err)
+		}
+	}
 	if header[0] != 9 {
 		r.pending = r.input
 		return nil
 	}
 	r.output = append(r.output[:0], header[:]...)
-	payload, keep, err := r.video.appendTag(r.output, r.input[11:11+size])
+	payload, keep, err := r.video.appendTag(r.output, payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("FLV video tag at byte %d: %w", offset, err)
 	}
 	if !keep {
 		return nil
@@ -127,11 +138,11 @@ type flvVideo struct {
 	pendingParameters bool
 }
 
-func (v *flvVideo) appendTag(dst, tag []byte) ([]byte, bool, error) {
+func videoPacket(tag []byte) (codec string, packet, offset int, key bool) {
 	if len(tag) < 5 {
-		return append(dst, tag...), true, nil
+		return "", 0, 0, false
 	}
-	codec, packet, offset, key := "", int(tag[1]), 5, tag[0]>>4 == 1
+	packet, offset, key = int(tag[1]), 5, tag[0]>>4 == 1
 	if tag[0]&0x80 != 0 { // Enhanced FLV uses FourCC instead of a codec nibble.
 		packet, key = int(tag[0]&15), tag[0]>>4&7 == 1
 		switch string(tag[1:5]) {
@@ -151,11 +162,22 @@ func (v *flvVideo) appendTag(dst, tag []byte) ([]byte, bool, error) {
 			codec = "hevc"
 		}
 	}
+	return codec, packet, offset, key
+}
+
+type videoCodecChange struct{ from, to string }
+
+func (e *videoCodecChange) Error() string {
+	return fmt.Sprintf("FLV video codec changed from %s to %s", e.from, e.to)
+}
+
+func (v *flvVideo) appendTag(dst, tag []byte) ([]byte, bool, error) {
+	codec, packet, offset, key := videoPacket(tag)
 	if codec == "" || (packet != 0 && packet != 1 && packet != 3) {
 		return append(dst, tag...), true, nil
 	}
 	if v.codec != "" && v.codec != codec {
-		return nil, false, errors.New("the raw FLV changes video codec; keep the original recording")
+		return nil, false, &videoCodecChange{v.codec, codec}
 	}
 	if packet == 0 {
 		lengthOffset, arrays, err := videoParameters(codec, tag[offset:])

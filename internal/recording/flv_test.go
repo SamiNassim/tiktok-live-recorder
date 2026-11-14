@@ -240,30 +240,25 @@ func TestProcessingPreservesResolutionChanges(t *testing.T) {
 			if len(want) != 50 {
 				t.Fatal("fixture did not contain every expected frame", len(want))
 			}
-			for _, extension := range []string{"mkv", "mp4", "ts"} {
-				t.Run(extension, func(t *testing.T) {
-					cfg := state.Defaults()
-					cfg.FFmpegPath, cfg.OutputExtension = path, extension
-					cfg.DeleteRawAfterProcessing = true
-					cfg.FFmpegArgs += " -metadata title=Example -bsf:v null"
-					output, err := Process(ctx, source, cfg)
-					if err != nil {
-						t.Fatal(err)
+			t.Run("mp4 stream copy", func(t *testing.T) {
+				cfg := state.Defaults()
+				cfg.FFmpegPath = path
+				cfg.DeleteRawAfterProcessing = true
+				copy, err := Process(ctx, source, cfg)
+				output := copy.Path
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := frames(t, output); copy.Reencoded || !slices.Equal(got, want) {
+					t.Fatal("processed frames changed or disappeared", len(got), len(want))
+				}
+				for _, stamp := range []string{"6.4", "8.4"} {
+					out, err := exec.CommandContext(ctx, path, "-hide_banner", "-nostdin", "-loglevel", "error", "-xerror", "-ss", stamp, "-i", output, "-t", "0.4", "-map", "0:v:0", "-an", "-f", "framemd5", "-").CombinedOutput()
+					if err != nil || !bytes.Contains(out, []byte("0,")) {
+						t.Fatalf("seek skipped current decoder settings: %v: %s", err, out)
 					}
-					if got := frames(t, output); !slices.Equal(got, want) {
-						t.Fatal("processed frames changed or disappeared", len(got), len(want))
-					}
-					if extension == "ts" {
-						return // MPEG-TS has no keyframe seek index.
-					}
-					for _, stamp := range []string{"6.4", "8.4"} {
-						out, err := exec.CommandContext(ctx, path, "-hide_banner", "-nostdin", "-loglevel", "error", "-xerror", "-ss", stamp, "-i", output, "-t", "0.4", "-map", "0:v:0", "-an", "-f", "framemd5", "-").CombinedOutput()
-						if err != nil || !bytes.Contains(out, []byte("0,")) {
-							t.Fatalf("seek skipped current decoder settings: %v: %s", err, out)
-						}
-					}
-				})
-			}
+				}
+			})
 			t.Run("custom encoding", func(t *testing.T) {
 				if !strings.Contains(string(encoders), " libx264 ") {
 					t.Skip("synthetic H.264 encoder is not installed")
@@ -275,7 +270,8 @@ func TestProcessingPreservesResolutionChanges(t *testing.T) {
 				cfg := state.Defaults()
 				cfg.FFmpegPath, cfg.DeleteRawAfterProcessing = path, true
 				cfg.FFmpegArgs = "-map 0:v:0 -c:v libx264 -preset ultrafast -crf 18 -vf scale=96:64"
-				output, err := Process(ctx, input, cfg)
+				copy, err := Process(ctx, input, cfg)
+				output := copy.Path
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -284,19 +280,20 @@ func TestProcessingPreservesResolutionChanges(t *testing.T) {
 				}
 			})
 			if codec == "h264" {
-				t.Run("cleanup rejects broken decoder configuration", func(t *testing.T) {
+				t.Run("default verification rejects broken decoder configuration", func(t *testing.T) {
 					input := filepath.Join(dir, "unsafe-copy.flv")
 					if err := os.WriteFile(input, raw, 0600); err != nil {
 						t.Fatal(err)
 					}
 					cfg := state.Defaults()
-					cfg.FFmpegPath, cfg.DeleteRawAfterProcessing = path, true
+					cfg.FFmpegPath = path
 					cfg.FFmpegArgs = "-map 0:v:0 -c copy -bsf:v filter_units=remove_types=7|8"
-					output, err := Process(ctx, input, cfg)
+					copy, err := Process(ctx, input, cfg)
+					output := copy.Path
 					if err == nil || output != "" || !strings.Contains(err.Error(), "verify the processed copy") {
 						t.Fatal("broken video was authorized for raw cleanup", output, err)
 					}
-					if _, err := os.Stat(strings.TrimSuffix(input, ".flv") + ".processed.mkv"); !os.IsNotExist(err) {
+					if _, err := os.Stat(strings.TrimSuffix(input, ".flv") + ".processed.mp4"); !os.IsNotExist(err) {
 						t.Fatal("published an unverified processed copy", err)
 					}
 					if got, err := os.ReadFile(input); err != nil || !bytes.Equal(got, raw) {

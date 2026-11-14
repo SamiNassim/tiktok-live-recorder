@@ -17,8 +17,8 @@ func TestDefaultsAndRoundTrip(t *testing.T) {
 		t.Fatal("queued polling must be enabled by default")
 	}
 	c := s.Config()
-	if !c.PostProcess || c.OutputExtension != "mkv" || c.FFmpegArgs != "-map 0:v? -map 0:a? -c copy" {
-		t.Fatal("new installations must create lossless MKV playback copies")
+	if !c.PostProcess || c.FFmpegArgs != "" {
+		t.Fatal("new installations must create automatic MP4 playback copies")
 	}
 	if c.DeleteRawAfterProcessing {
 		t.Fatal("new installations must keep original FLV files")
@@ -81,8 +81,7 @@ func TestSavedProcessingPreferencesSurviveNewDefaults(t *testing.T) {
 			}
 			cfg := s.Config()
 			cfg.PostProcess = enabled
-			cfg.OutputExtension = "mp4"
-			cfg.FFmpegArgs += " -movflags +faststart"
+			cfg.FFmpegArgs = "-c copy -movflags +faststart"
 			if err := s.SaveConfig(cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -91,10 +90,25 @@ func TestSavedProcessingPreferencesSurviveNewDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := reopened.Config()
-			if got.PostProcess != enabled || got.OutputExtension != cfg.OutputExtension || got.FFmpegArgs != cfg.FFmpegArgs {
+			if got.PostProcess != enabled || got.FFmpegArgs != cfg.FFmpegArgs {
 				t.Fatal("saved processing preferences were replaced by defaults")
 			}
 		})
+	}
+}
+
+func TestLegacyDefaultProcessingUsesAutomaticMP4(t *testing.T) {
+	dir := t.TempDir()
+	const legacy = `{"output_extension":"mkv","ffmpeg_args":"-map 0:v? -map 0:a? -c copy","post_process":true}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Config(); !got.PostProcess || got.FFmpegArgs != "" {
+		t.Fatal("old default did not migrate to automatic processing")
 	}
 }
 

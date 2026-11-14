@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,7 @@ func OutputArgs(raw string) ([]string, error) {
 		args = append(args, token.String())
 	}
 	flags := map[string]bool{"-an": true, "-vn": true, "-sn": true, "-dn": true, "-shortest": true, "-bitexact": true}
-	values := map[string]bool{"-c": true, "-codec": true, "-c:v": true, "-c:a": true, "-c:s": true, "-codec:v": true, "-codec:a": true, "-map": true, "-map_metadata": true, "-map_chapters": true, "-b:v": true, "-b:a": true, "-crf": true, "-preset": true, "-tune": true, "-movflags": true, "-fflags": true, "-flvflags": true, "-vf": true, "-af": true, "-r": true, "-s": true, "-pix_fmt": true, "-profile:v": true, "-level:v": true, "-maxrate": true, "-bufsize": true, "-ar": true, "-ac": true, "-metadata": true, "-disposition:v": true, "-disposition:a": true, "-bsf:v": true, "-bsf:a": true, "-f": true, "-fps_mode": true, "-tag:v": true, "-tag:a": true, "-cluster_time_limit": true, "-cluster_size_limit": true, "-flush_packets": true}
+	values := map[string]bool{"-c": true, "-codec": true, "-c:v": true, "-c:a": true, "-c:s": true, "-codec:v": true, "-codec:a": true, "-map": true, "-map_metadata": true, "-map_chapters": true, "-b:v": true, "-b:a": true, "-crf": true, "-preset": true, "-tune": true, "-movflags": true, "-fflags": true, "-flvflags": true, "-vf": true, "-af": true, "-r": true, "-s": true, "-pix_fmt": true, "-profile:v": true, "-level:v": true, "-maxrate": true, "-bufsize": true, "-ar": true, "-ac": true, "-metadata": true, "-disposition:v": true, "-disposition:a": true, "-bsf:v": true, "-bsf:a": true, "-f": true, "-fps_mode": true, "-tag:v": true, "-tag:a": true, "-flush_packets": true}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if flags[arg] {
@@ -86,8 +87,13 @@ func OutputArgs(raw string) ([]string, error) {
 		if strings.ContainsAny(args[i], "\r\n\x00") || strings.Contains(args[i], "{input}") || strings.Contains(args[i], "{output}") {
 			return nil, errors.New("enter output options only, without paths or placeholders")
 		}
-		if arg == "-f" && args[i] != "matroska" && args[i] != "mp4" && args[i] != "mpegts" {
-			return nil, errors.New("output formats are limited to matroska, mp4, or mpegts; playlists and multiple-file formats are not supported")
+		if arg == "-f" {
+			switch args[i] {
+			case "mp4", "matroska", "mpegts":
+				args[i] = "mp4" // Old saved options can explicitly select a retired format.
+			default:
+				return nil, errors.New("processed copies use MP4")
+			}
 		}
 		if arg == "-vf" || arg == "-af" { // Filters are expressions, not alternate file inputs.
 			lower := strings.ToLower(args[i])
@@ -99,93 +105,157 @@ func OutputArgs(raw string) ([]string, error) {
 	return args, nil
 }
 
-func Process(parent context.Context, source string, cfg state.Config) (string, error) {
+// ProcessedCopy reports whether automatic recovery re-encoded the source.
+type ProcessedCopy struct {
+	Path      string
+	Reencoded bool
+}
+
+var ffmpegBase = []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-n"}
+
+func Process(parent context.Context, source string, cfg state.Config) (ProcessedCopy, error) {
 	args, err := OutputArgs(cfg.FFmpegArgs)
 	if err != nil {
-		return "", fault.Action("could not create the processed copy; check the custom FFmpeg output options. Raw FLV kept", err)
+		return ProcessedCopy{}, fault.Action("could not create the processed copy; check the custom FFmpeg output options. Raw FLV kept", err)
 	}
 	path, err := ffmpeg.Find(cfg.FFmpegPath)
 	if err != nil {
-		return "", fault.Action("could not create the processed copy; install or select FFmpeg in Settings. Raw FLV kept", err)
+		return ProcessedCopy{}, fault.Action("could not create the processed copy; install or select FFmpeg in Settings. Raw FLV kept", err)
 	}
-	if cfg.OutputExtension != "mp4" && cfg.OutputExtension != "mkv" && cfg.OutputExtension != "ts" {
-		return "", fault.Action("could not create the processed copy; choose a supported output format in Settings. Raw FLV kept", nil)
-	}
-	target := strings.TrimSuffix(source, filepath.Ext(source)) + ".processed." + cfg.OutputExtension
+	target := strings.TrimSuffix(source, filepath.Ext(source)) + ".processed.mp4"
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return "", fault.Action("the processed output already exists or cannot be checked; raw FLV kept", err)
+		return ProcessedCopy{}, fault.Action("the processed output already exists or cannot be checked; raw FLV kept", err)
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(target), ".processing-")
 	if err != nil {
-		return "", fault.Action("could not create a processing folder; check disk space and folder permissions. Raw FLV kept", err)
+		return ProcessedCopy{}, fault.Action("could not create a processing folder; check disk space and folder permissions. Raw FLV kept", err)
 	}
 	defer os.RemoveAll(stage)
-	staged := filepath.Join(stage, "recording."+cfg.OutputExtension)
+	staged := filepath.Join(stage, "recording.mp4")
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
-	input, err := processingInput(ctx, source)
+
+	outputArgs := []string{"-map", "0:v?", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart"}
+	if len(args) > 0 {
+		outputArgs = args
+	}
+	var codecChange *videoCodecChange
+	var rewind *flvTimestampRewind
+	err = copyFLV(ctx, path, source, staged, outputArgs)
+	reencoded := false
+	if err == nil {
+		err = verifyCopy(ctx, path, staged)
+	}
+	// The original remains available even when recovery needs to change the
+	// encoded picture or repair the timeline.
+	if ctx.Err() == nil && err != nil && (errors.As(err, &codecChange) || errors.As(err, &rewind) || len(args) == 0 && canRecoverMP4(err)) {
+		if removeErr := os.Remove(staged); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return ProcessedCopy{}, fault.Action("Could not clear the incomplete MP4. Raw FLV kept", errors.Join(removeErr, err))
+		}
+		recovered := filepath.Join(stage, "recovered.mp4")
+		if recoverErr := recoverMP4(ctx, path, source, recovered); recoverErr != nil {
+			if ctx.Err() != nil {
+				return ProcessedCopy{}, processingFailure(ctx.Err(), recoverErr, "", "recover the processed copy")
+			}
+			return ProcessedCopy{}, fault.Action("Could not recover the recording as MP4. Raw FLV kept", errors.Join(recoverErr, err))
+		}
+		reencoded = true
+		if len(args) > 0 {
+			custom := filepath.Join(stage, "custom.mp4")
+			if err := runFFmpeg(ctx, path, nil, "apply the custom MP4 options", append(append([]string{"-xerror", "-i", recovered}, args...), custom)...); err != nil {
+				return ProcessedCopy{}, err
+			}
+			recovered = custom
+		}
+		staged = recovered
+		err = verifyCopy(ctx, path, staged)
+	}
 	if err != nil {
-		return "", fault.Action("could not read the raw FLV for processing; raw FLV kept", err)
-	}
-	defer input.Close()
-	argv := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-n"}
-	if cfg.DeleteRawAfterProcessing {
-		argv = append(argv, "-xerror")
-	}
-	argv = append(argv, "-i", "pipe:0")
-	argv = append(argv, args...)
-	argv = append(argv, staged)
-	cmd := exec.CommandContext(ctx, path, argv...)
-	configureCommand(cmd)
-	cmd.Stdin = input
-	var stderr tailBuffer
-	cmd.Stderr = &stderr
-	if err = cmd.Run(); err != nil {
-		return "", processingFailure(ctx.Err(), err, stderr.String(), "create the processed copy")
-	}
-	if info, err := os.Stat(staged); err != nil || info.Size() == 0 {
-		return "", fault.Action("FFmpeg produced no processed copy; raw FLV kept", err)
-	}
-	if cfg.DeleteRawAfterProcessing {
-		// Packet copying cannot detect missing decoder settings. Decode the
-		// complete copy before allowing cleanup, without saving re-encoded media.
-		verify := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-err_detect", "explode", "-abort_on", "empty_output+empty_output_stream", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
-		configureCommand(verify)
-		var decodeErrors tailBuffer
-		verify.Stderr = &decodeErrors
-		verifyErr := verify.Run()
-		// Some older FFmpeg releases return zero despite decoder errors, even
-		// with -xerror. At error log level, stderr must also remain empty.
-		if verifyErr == nil && decodeErrors.String() != "" {
-			verifyErr = errors.New("FFmpeg reported video or audio decoding errors")
-		}
-		if verifyErr != nil {
-			return "", processingFailure(ctx.Err(), verifyErr, decodeErrors.String(), "verify the processed copy")
-		}
+		return ProcessedCopy{}, err
 	}
 	if err := syncProcessedCopy(staged, false); err != nil {
-		return "", fault.Action("the processed copy could not be safely synchronized to disk; raw FLV kept", err)
+		return ProcessedCopy{}, fault.Action("the processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", processingFailure(err, err, "", "publish the processed copy")
+		return ProcessedCopy{}, processingFailure(err, err, "", "publish the processed copy")
 	}
 	// A hard link publishes the finished file without replacing an existing
 	// destination. Filesystems without hard links use an exclusive copy instead.
 	if err := os.Link(staged, target); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return "", fault.Action("the processed output already exists; raw FLV kept", err)
+			return ProcessedCopy{}, fault.Action("the processed output already exists; raw FLV kept", err)
 		}
 		if err := copyProcessedExclusive(ctx, staged, target); err != nil {
 			if ctx.Err() != nil {
-				return "", processingFailure(ctx.Err(), err, "", "publish the processed copy")
+				return ProcessedCopy{}, processingFailure(ctx.Err(), err, "", "publish the processed copy")
 			}
-			return "", fault.Action("could not publish the processed copy; check disk space and folder permissions. Raw FLV kept", err)
+			return ProcessedCopy{}, fault.Action("could not publish the processed copy; check disk space and folder permissions. Raw FLV kept", err)
 		}
 	}
-	if err := syncProcessedCopy(target, cfg.DeleteRawAfterProcessing); err != nil {
-		return "", fault.Action("the published processed copy could not be safely synchronized to disk; raw FLV kept", err)
+	if err := syncProcessedCopy(target, cfg.DeleteRawAfterProcessing && !reencoded); err != nil {
+		return ProcessedCopy{}, fault.Action("the published processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
-	return target, nil
+	return ProcessedCopy{Path: target, Reencoded: reencoded}, nil
+}
+
+func copyFLV(ctx context.Context, path, source, staged string, args []string) error {
+	input, err := processingInput(ctx, source)
+	if err != nil {
+		return fault.Action("could not read the raw FLV for processing; raw FLV kept", err)
+	}
+	defer input.Close()
+	argv := []string{"-xerror", "-i", "pipe:0"}
+	argv = append(argv, args...)
+	argv = append(argv, staged)
+	stdin := &processingReader{Reader: input}
+	return runFFmpeg(ctx, path, stdin, "create the processed copy", argv...)
+}
+
+func runFFmpeg(ctx context.Context, path string, input *processingReader, operation string, args ...string) error {
+	cmd := exec.CommandContext(ctx, path, append(slices.Clone(ffmpegBase), args...)...)
+	configureCommand(cmd)
+	if input != nil {
+		cmd.Stdin = input
+	}
+	var stderr tailBuffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	details := stderr.String()
+	if input != nil && input.err != nil && ctx.Err() == nil {
+		// Cmd.Run can return the exit error in place of a read error.
+		if errors.Is(err, input.err) {
+			err = nil
+		}
+		return fault.Action("Could not prepare the raw FLV for FFmpeg. Raw FLV kept",
+			errors.Join(input.err, ffmpegCause(err, details)))
+	}
+	if err == nil && details != "" {
+		err = errors.New("FFmpeg reported errors")
+	}
+	if err != nil {
+		return processingFailure(ctx.Err(), err, details, operation)
+	}
+	return nil
+}
+
+func verifyCopy(ctx context.Context, path, staged string) error {
+	if info, err := os.Stat(staged); err != nil || info.Size() == 0 {
+		return fault.Action("FFmpeg produced no processed copy; raw FLV kept", err)
+	}
+	return runFFmpeg(ctx, path, nil, "verify the processed copy", "-xerror", "-err_detect", "explode", "-abort_on", "empty_output+empty_output_stream", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
+}
+
+type processingReader struct {
+	io.Reader
+	err error
+}
+
+func (r *processingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
 }
 
 func copyProcessedExclusive(ctx context.Context, source, target string) error {
@@ -220,7 +290,10 @@ func copyProcessedExclusive(ctx context.Context, source, target string) error {
 	if errors.Is(err, io.EOF) {
 		err = output.Sync()
 	}
-	return errors.Join(err, output.Close())
+	if err = errors.Join(err, output.Close()); err != nil {
+		return errors.Join(err, os.Remove(target))
+	}
+	return nil
 }
 
 func syncProcessedCopy(path string, syncParent bool) error {

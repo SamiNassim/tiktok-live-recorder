@@ -3,7 +3,6 @@ package recording
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"tiktok-live-recorder/internal/fault"
@@ -24,11 +23,14 @@ func ffmpegCause(err error, stderr string) error {
 	if stderr == "" {
 		return err
 	}
-	return fmt.Errorf("%w; FFmpeg output: %s", err, stderr)
+	return errors.Join(err, errors.New("FFmpeg output:\n"+stderr))
 }
 
 func ffmpegMessage(operation, stderr string) string {
 	message := "FFmpeg could not " + operation
+	if stderr == "" {
+		return message
+	}
 	text := strings.ToLower(stderr)
 	switch {
 	case strings.Contains(text, "no space left"), strings.Contains(text, "not enough space on the disk"):

@@ -28,7 +28,6 @@ type Config struct {
 	PostProcess              bool   `json:"post_process"`
 	DeleteRawAfterProcessing bool   `json:"delete_raw_after_processing"`
 	FFmpegArgs               string `json:"ffmpeg_args"`
-	OutputExtension          string `json:"output_extension"`
 }
 
 type Window struct {
@@ -85,7 +84,7 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{Theme: "system", RecordingPath: filepath.Join(home, "Movies", "TikTok Live Recorder"), PollingEnabled: true,
 		PollSeconds: 75, ColdSeconds: 300, RequestDelaySeconds: 2, AutoPromote: true, Notifications: true, FolderPerStreamer: true,
-		PostProcess: true, FFmpegArgs: `-map 0:v? -map 0:a? -c copy`, OutputExtension: "mkv"}
+		PostProcess: true}
 }
 
 func (c Config) Validate() error {
@@ -103,9 +102,6 @@ func (c Config) Validate() error {
 	}
 	if c.RequestDelaySeconds < 1 || c.RequestDelaySeconds > 30 {
 		return errors.New("request delay must be between 1 and 30 seconds")
-	}
-	if c.OutputExtension != "mkv" && c.OutputExtension != "mp4" && c.OutputExtension != "ts" {
-		return errors.New("choose MKV, MP4, or TS for the optional processed copy")
 	}
 	return nil
 }
@@ -157,6 +153,9 @@ func Open(dir string) (*Store, error) {
 	}
 	if !s.config.PostProcess {
 		s.config.DeleteRawAfterProcessing = false
+	}
+	if s.config.FFmpegArgs == "-map 0:v? -map 0:a? -c copy" {
+		s.config.FFmpegArgs = "" // The previous default becomes automatic MP4 processing.
 	}
 	return s, nil
 }
