@@ -164,6 +164,12 @@ func TestRecordingConversionMenuAvailability(t *testing.T) {
 		if err := tt.ChooseMenuItem(test.action); err == nil {
 			t.Fatal("conversion enabled in preview or for an unavailable original", test.name)
 		}
+		if !slices.Contains(tt.Menu(), "Repair recording…") {
+			t.Fatal("repair action missing", test.name)
+		}
+		if err := tt.ChooseMenuItem("Repair recording…"); err == nil {
+			t.Fatal("repair enabled in preview or for an unavailable original", test.name)
+		}
 		tt.CloseMenu()
 	}
 }

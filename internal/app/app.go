@@ -60,6 +60,8 @@ type application struct {
 	streamSelected                  int
 	settingsScroll                  ui.ScrollState
 	clearHistoryOpen                bool
+	repairOpen                      bool
+	repairTarget                    state.Recording
 	accountSettingsRequested        bool
 	toasts                          []string
 	processingFailures              []monitor.ProcessingFailure
@@ -360,8 +362,12 @@ func (a *application) view(c *ui.Context) {
 	}
 	a.toasts = nil
 	for _, failure := range a.processingFailures {
+		title := "MP4 conversion failed"
+		if failure.Repair {
+			title = "Recording repair failed"
+		}
 		c.AddToast(ui.Toast{
-			Title:       "MP4 conversion failed",
+			Title:       title,
 			Description: filepath.Base(failure.Path) + "\n" + failure.Message,
 			Type:        "error",
 			Timeout:     10 * time.Second,

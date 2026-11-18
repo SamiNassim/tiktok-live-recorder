@@ -104,10 +104,12 @@ func OutputArgs(raw string) ([]string, error) {
 	return args, nil
 }
 
-// ProcessedCopy reports whether automatic recovery re-encoded the source.
+// ProcessedCopy describes a verified playback copy. Re-encoded copies never
+// authorize raw cleanup. Diagnostics contains nonfatal input errors from repair.
 type ProcessedCopy struct {
-	Path      string
-	Reencoded bool
+	Path        string
+	Reencoded   bool
+	Diagnostics string
 }
 
 var ffmpegBase = []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-n"}
@@ -119,7 +121,15 @@ func Process(ctx context.Context, source string, cfg state.Config) (ProcessedCop
 // ProcessWithProgress reports phase changes and FFmpeg's actual media clock.
 // It shares Process's publication, verification and raw-preservation rules.
 func ProcessWithProgress(ctx context.Context, source string, cfg state.Config, report func(Progress)) (ProcessedCopy, error) {
-	reportPhase(report, "Preparing conversion")
+	return processWithProgress(ctx, source, cfg, report, false)
+}
+
+func processWithProgress(ctx context.Context, source string, cfg state.Config, report func(Progress), repair bool) (ProcessedCopy, error) {
+	phase := "Preparing conversion"
+	if repair {
+		phase = "Preparing repair"
+	}
+	reportPhase(report, phase)
 	args, err := OutputArgs(cfg.FFmpegArgs)
 	if err != nil {
 		return ProcessedCopy{}, fault.Action("could not create the processed copy; check the custom FFmpeg output options. Raw FLV kept", err)
@@ -128,7 +138,11 @@ func ProcessWithProgress(ctx context.Context, source string, cfg state.Config, r
 	if err != nil {
 		return ProcessedCopy{}, fault.Action("could not create the processed copy; install or select FFmpeg in Settings. Raw FLV kept", err)
 	}
-	target, err := nextProcessedPath(source)
+	suffix := "processed"
+	if repair {
+		suffix = "repaired"
+	}
+	target, err := nextCopyPath(source, suffix)
 	if err != nil {
 		return ProcessedCopy{}, fault.Action("could not choose a separate processed output; raw FLV kept", err)
 	}
@@ -146,14 +160,19 @@ func ProcessWithProgress(ctx context.Context, source string, cfg state.Config, r
 	var codecChange *videoCodecChange
 	var rewind *flvTimestampRewind
 	var truncated *flvTruncatedTail
-	err = copyFLV(ctx, path, source, staged, outputArgs, report)
-	reencoded := false
+	var diagnostics string
+	reencoded := repair
+	if repair {
+		diagnostics, err = repairMP4Progress(ctx, path, source, staged, report)
+	} else {
+		err = copyFLV(ctx, path, source, staged, outputArgs, report)
+	}
 	if err == nil {
 		err = verifyCopyProgress(ctx, path, staged, report)
 	}
 	// The original remains available even when recovery needs to change the
 	// encoded picture or repair the timeline.
-	if ctx.Err() == nil && err != nil && (errors.As(err, &codecChange) || errors.As(err, &rewind) || errors.As(err, &truncated) || canRecoverMP4(err)) {
+	if !repair && ctx.Err() == nil && err != nil && (errors.As(err, &codecChange) || errors.As(err, &rewind) || errors.As(err, &truncated) || canRecoverMP4(err)) {
 		if removeErr := os.Remove(staged); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return ProcessedCopy{}, fault.Action("Could not clear the incomplete MP4. Raw FLV kept", errors.Join(removeErr, err))
 		}
@@ -201,15 +220,15 @@ func ProcessWithProgress(ctx context.Context, source string, cfg state.Config, r
 	if err := syncProcessedCopy(target, cfg.DeleteRawAfterProcessing && !reencoded); err != nil {
 		return ProcessedCopy{}, fault.Action("the published processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
-	return ProcessedCopy{Path: target, Reencoded: reencoded}, nil
+	return ProcessedCopy{Path: target, Reencoded: reencoded, Diagnostics: diagnostics}, nil
 }
 
-func nextProcessedPath(source string) (string, error) {
+func nextCopyPath(source, kind string) (string, error) {
 	base := strings.TrimSuffix(source, filepath.Ext(source))
 	for n := 1; n <= 9999; n++ {
-		suffix := ".processed.mp4"
+		suffix := "." + kind + ".mp4"
 		if n > 1 {
-			suffix = fmt.Sprintf(".processed-%d.mp4", n)
+			suffix = fmt.Sprintf(".%s-%d.mp4", kind, n)
 		}
 		path := base + suffix
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
@@ -239,6 +258,13 @@ func runFFmpeg(ctx context.Context, path string, input *processingReader, operat
 }
 
 func runFFmpegProgress(ctx context.Context, path string, input *processingReader, operation string, report func(Progress), args ...string) error {
+	_, err := runFFmpegProgressMode(ctx, path, input, operation, report, false, args...)
+	return err
+}
+
+// Only the explicit repair encoder tolerates nonfatal input diagnostics. A
+// nonzero exit still fails, and output verification always uses the strict mode.
+func runFFmpegProgressMode(ctx context.Context, path string, input *processingReader, operation string, report func(Progress), tolerateInputErrors bool, args ...string) (string, error) {
 	base := slices.Clone(ffmpegBase)
 	phase := processingPhase(operation)
 	reportPhase(report, phase)
@@ -262,16 +288,16 @@ func runFFmpegProgress(ctx context.Context, path string, input *processingReader
 		if errors.Is(err, input.err) {
 			err = nil
 		}
-		return fault.Action("Could not prepare the raw FLV for FFmpeg. Raw FLV kept",
+		return details, fault.Action("Could not prepare the raw FLV for FFmpeg. Raw FLV kept",
 			errors.Join(input.err, ffmpegCause(err, details)))
 	}
-	if err == nil && details != "" {
+	if err == nil && details != "" && !tolerateInputErrors {
 		err = errors.New("FFmpeg reported errors")
 	}
 	if err != nil {
-		return processingFailure(ctx.Err(), err, details, operation)
+		return details, processingFailure(ctx.Err(), err, details, operation)
 	}
-	return nil
+	return details, nil
 }
 
 func verifyCopy(ctx context.Context, path, staged string) error {

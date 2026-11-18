@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,13 +29,18 @@ func conversionStatus(job monitor.ProcessingState) string {
 		return "Queued…"
 	}
 	phase := "Converting"
+	if job.Repair {
+		phase = "Repairing"
+	}
 	switch job.Progress.Phase {
-	case "Preparing conversion":
+	case "Preparing conversion", "Preparing repair":
 		phase = "Preparing"
 	case "Preparing recovery", "Applying options":
 		phase = job.Progress.Phase
 	case "Encoding MP4":
 		phase = "Encoding"
+	case "Repairing MP4":
+		phase = "Repairing"
 	case "Verifying MP4":
 		phase = "Validating"
 	case "Saving MP4":
@@ -112,7 +118,14 @@ func (a *application) recordingMenu(m *ui.Menu, r state.Recording, services ui.S
 				return nil
 			})
 		}
-		if processing && m.Item("Cancel conversion").Disabled(a.busy || a.preview || a.engine == nil || !a.snapshot.Processing[r.Path].Cancelable).Chosen() {
+		if m.Item("Repair recording…").Disabled(a.busy || a.preview || a.engine == nil || processing || r.RawDeleted || r.Path == "" || r.EndedAt.IsZero()).Chosen() {
+			a.repairTarget, a.repairOpen = r, true
+		}
+		cancelLabel := "Cancel conversion"
+		if a.snapshot.Processing[r.Path].Repair {
+			cancelLabel = "Cancel repair"
+		}
+		if processing && m.Item(cancelLabel).Disabled(a.busy || a.preview || a.engine == nil || !a.snapshot.Processing[r.Path].Cancelable).Chosen() {
 			a.work(func() error { return a.engine.CancelProcessing(r.ID) })
 		}
 	}
@@ -125,6 +138,40 @@ func (a *application) recordingMenu(m *ui.Menu, r state.Recording, services ui.S
 			a.update(func() { a.toasts = append(a.toasts, "Recording removed from history. Files kept.") })
 			return nil
 		})
+	}
+}
+
+func (a *application) recordingRepairDialog(c *ui.Context) {
+	ui.Modal(c, &a.repairOpen, func() {
+		r := a.repairTarget
+		ui.Text(c, "Try to repair this recording?").FontSize(22).FontWeight(600)
+		ui.Text(c, filepath.Base(r.Path)).FontSize(12).TextColor(c.Theme().TextMuted).Width(440)
+		ui.Text(c, "Try this if a normal MP4 conversion fails. Repair uses a more tolerant conversion to create a new playback copy.").Width(440)
+		ui.Text(c, "Damaged video or audio may be skipped or reconstructed. The repaired copy may contain visual glitches, gaps, audio sync issues, or reduced quality.").Width(440)
+		ui.Text(c, "The original FLV and any existing MP4 copies are always kept. Repair can take longer and may still fail.").Width(440)
+		if strings.TrimSpace(a.cfg.FFmpegArgs) != "" {
+			ui.Text(c, "Custom output options are not used for repair.").FontSize(12).TextColor(c.Theme().TextMuted).Width(440)
+		}
+		ui.Row(c).Justify(ui.End).Gap(10).Children(func() {
+			if ui.Button(c, "Cancel").Clicked() {
+				a.repairOpen = false
+			}
+			if ui.PrimaryButton(c, "Create repaired MP4").Disabled(a.busy || a.preview || a.engine == nil || a.recordingProcessing(r) || r.RawDeleted || r.Path == "" || r.EndedAt.IsZero()).Clicked() {
+				a.work(func() error {
+					if err := a.engine.RepairRecording(r.ID); err != nil {
+						return err
+					}
+					a.update(func() {
+						a.toasts = append(a.toasts, "Recording repair queued. The original FLV and existing MP4 copies will be kept.")
+					})
+					return nil
+				})
+				a.repairOpen = false
+			}
+		})
+	})
+	if !a.repairOpen {
+		a.repairTarget = state.Recording{}
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 type ProcessingState struct {
 	Queued     bool
+	Repair     bool
 	Cancelable bool
 	StartedAt  time.Time
 	Progress   recording.Progress
@@ -35,6 +36,7 @@ type processingJob struct {
 // ProcessingFailure is a completed conversion failure awaiting UI feedback.
 type ProcessingFailure struct {
 	StreamerID, Path, Message string
+	Repair                    bool
 }
 
 // TakeProcessingFailures delivers each failure once, including jobs that finish
@@ -51,8 +53,28 @@ func (e *Engine) TakeProcessingFailures() []ProcessingFailure {
 // RetryProcessing uses the same bounded converter queue as newly completed
 // recordings. An explicit retry also works when automatic processing is off.
 func (e *Engine) RetryProcessing(recordingID string) error {
+	return e.retryProcessing(recordingID, false)
+}
+
+// RepairRecording explicitly opts into tolerant conversion, using the same
+// bounded queue and cancellation controls. It always retains the original FLV.
+func (e *Engine) RepairRecording(recordingID string) error {
+	return e.retryProcessing(recordingID, true)
+}
+
+func (e *Engine) retryProcessing(recordingID string, repair bool) (err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	id := "recordings"
+	defer func() {
+		if err != nil && e.log != nil && e.ctx.Err() == nil {
+			operation := "Could not queue MP4 conversion: "
+			if repair {
+				operation = "Could not queue recording repair: "
+			}
+			e.log.WriteError("ERROR", id, operation+fault.Reason(err), err)
+		}
+	}()
 	if err := e.ctx.Err(); err != nil {
 		return err
 	}
@@ -62,6 +84,7 @@ func (e *Engine) RetryProcessing(recordingID string) error {
 		return errors.New("recording is no longer in history")
 	}
 	r := rows[i]
+	id = r.StreamerID
 	if r.EndedAt.IsZero() || r.RawDeleted || r.Path == "" {
 		return errors.New("choose a completed recording whose original FLV is still available")
 	}
@@ -72,7 +95,12 @@ func (e *Engine) RetryProcessing(recordingID string) error {
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 13 || !strings.EqualFold(filepath.Ext(r.Path), ".flv") {
 		return fault.Action("the original FLV is missing or cannot be read for conversion", err)
 	}
-	e.processCopy(r.StreamerID, r.Path, e.store.Config())
+	cfg := e.store.Config()
+	if repair {
+		cfg.FFmpegArgs = ""
+		cfg.DeleteRawAfterProcessing = false
+	}
+	e.processCopyMode(r.StreamerID, r.Path, cfg, repair)
 	return nil
 }
 
@@ -108,6 +136,10 @@ func (e *Engine) CancelProcessing(recordingID string) error {
 // The caller holds e.mu, so the processor and recording settings are captured
 // before another UI operation can change them.
 func (e *Engine) processCopy(id, source string, cfg state.Config) {
+	e.processCopyMode(id, source, cfg, false)
+}
+
+func (e *Engine) processCopyMode(id, source string, cfg state.Config, repair bool) {
 	if e.processingJobs == nil {
 		e.processingJobs = make(map[string]*processingJob)
 	}
@@ -116,7 +148,7 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 	}
 	ctx, cancel := context.WithCancel(e.ctx)
 	job := &processingJob{
-		ProcessingState: ProcessingState{Queued: true, Cancelable: true, Passes: 2, Percent: -1, Overall: -1},
+		ProcessingState: ProcessingState{Queued: true, Repair: repair, Cancelable: true, Passes: 2, Percent: -1, Overall: -1},
 		cancel:          cancel,
 		tracker:         conversionProgress{custom: strings.TrimSpace(cfg.FFmpegArgs) != ""},
 	}
@@ -132,6 +164,9 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 	e.processingJobs[source] = job
 	e.processingRevision++
 	process := e.process
+	if repair {
+		process = e.repair
+	}
 	e.wg.Go(func() {
 		defer func() {
 			cancel()
@@ -154,15 +189,22 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 		e.mu.Lock()
 		job.Queued, job.StartedAt = false, time.Now()
 		job.Progress = recording.Progress{Phase: "Preparing conversion"}
+		if repair {
+			job.Progress.Phase = "Preparing repair"
+		}
 		e.processingRevision++
 		e.mu.Unlock()
-		deleteRaw := cfg.PostProcess && cfg.DeleteRawAfterProcessing
+		deleteRaw := !repair && cfg.PostProcess && cfg.DeleteRawAfterProcessing
 		var original os.FileInfo
 		var originalErr error
 		if deleteRaw {
 			original, originalErr = snapshotFile(source)
 		}
-		e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
+		if repair {
+			e.log.Write("INFO", id, "Trying a tolerant MP4 repair; original FLV and existing copies are kept")
+		} else {
+			e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
+		}
 		copy, err := process(ctx, source, cfg, func(progress recording.Progress) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
@@ -173,7 +215,7 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			}
 		})
 		path := copy.Path
-		deleteRaw = deleteRaw && !copy.Reencoded
+		deleteRaw = deleteRaw && !copy.Reencoded && !repair
 		if e.ctx.Err() != nil {
 			e.log.Write("INFO", id, "Processing interrupted on shutdown; raw FLV is preserved")
 			return
@@ -217,10 +259,14 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			} else if fault.RequiresAction(err) {
 				level = "ERROR"
 			}
-			e.log.WriteError(level, id, "Processed copy failed: "+fault.Reason(err), err)
+			message := "Processed copy failed: "
+			if repair {
+				message = "Recording repair failed: "
+			}
+			e.log.WriteError(level, id, message+fault.Reason(err), err)
 			if !errors.Is(err, context.Canceled) {
 				e.mu.Lock()
-				e.processingFailures = append(e.processingFailures, ProcessingFailure{StreamerID: id, Path: source, Message: fault.Reason(err)})
+				e.processingFailures = append(e.processingFailures, ProcessingFailure{StreamerID: id, Path: source, Message: fault.Reason(err), Repair: repair})
 				e.processingRevision++
 				e.mu.Unlock()
 			}
@@ -239,6 +285,12 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			}
 		} else if err != nil {
 			e.log.WriteError("WARN", id, "Processed copy ready; raw FLV kept because cleanup could not complete: "+fault.Reason(err), err)
+		} else if repair {
+			if copy.Diagnostics != "" {
+				e.log.WriteError("WARN", id, "Repaired MP4 ready; damaged media may have been skipped or reconstructed. Original FLV kept", fault.Wrap("FFmpeg repair diagnostics", errors.New(copy.Diagnostics)))
+			} else {
+				e.log.Write("INFO", id, "Repaired MP4 ready; original FLV and existing copies kept")
+			}
 		} else if copy.Reencoded {
 			e.log.Write("INFO", id, "Processed MP4 ready after re-encoding; raw FLV kept")
 		} else {

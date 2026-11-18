@@ -330,7 +330,11 @@ func (a *application) recordings(c *ui.Context) {
 								refreshClock(c, c.Now().Sub(job.StartedAt), false)
 							}
 						}
-						ui.Text(c, "Creating MP4…").FontSize(12).SingleLine().Tooltip(tooltip)
+						label := "Creating MP4…"
+						if job.Repair {
+							label = "Repairing MP4…"
+						}
+						ui.Text(c, label).FontSize(12).SingleLine().Tooltip(tooltip)
 						ui.Text(c, conversionStatus(job)).FontSize(11).TextColor(t.Warning).SingleLine().Tooltip(tooltip)
 					} else {
 						ui.Text(c, filepath.Base(recordingPlaybackPath(r))).FontSize(11).SingleLine().Tooltip(tooltip)
@@ -522,6 +526,7 @@ func (a *application) settings(c *ui.Context) {
 func (a *application) dialogs(c *ui.Context) {
 	a.ffmpegDialog(c)
 	a.recordingHistoryDialog(c)
+	a.recordingRepairDialog(c)
 	ui.Modal(c, &a.addOpen, func() {
 		ui.Text(c, "Add a streamer").FontSize(22).FontWeight(600)
 		ui.Text(c, "Paste a TikTok profile/live URL, or enter a username.").TextColor(c.Theme().TextMuted)

@@ -21,7 +21,7 @@ type conversionProgress struct {
 
 func mediaPass(phase string) bool {
 	switch phase {
-	case "Creating MP4", "Encoding MP4", "Applying options", "Verifying MP4":
+	case "Creating MP4", "Encoding MP4", "Repairing MP4", "Applying options", "Verifying MP4":
 		return true
 	}
 	return false

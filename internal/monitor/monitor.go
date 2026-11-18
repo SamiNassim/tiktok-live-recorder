@@ -85,6 +85,7 @@ type Engine struct {
 	wg                 sync.WaitGroup
 	processing         chan struct{}
 	process            func(context.Context, string, state.Config, func(recording.Progress)) (recording.ProcessedCopy, error)
+	repair             func(context.Context, string, state.Config, func(recording.Progress)) (recording.ProcessedCopy, error)
 	processingJobs     map[string]*processingJob
 	processingRevision uint64
 	processingFailures []ProcessingFailure
@@ -97,7 +98,7 @@ func New(store *state.Store, log *logging.Log) *Engine {
 }
 func newEngine(store *state.Store, log *logging.Log, client streamClient, start startRecording) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64), processing: make(chan struct{}, 2), process: recording.ProcessWithProgress}
+	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64), processing: make(chan struct{}, 2), process: recording.ProcessWithProgress, repair: recording.RepairWithProgress}
 	e.recoverHistory()
 	e.configure(store.Config())
 	e.wg.Add(1)

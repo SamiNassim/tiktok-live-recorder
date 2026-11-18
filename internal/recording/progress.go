@@ -28,6 +28,8 @@ func processingPhase(operation string) string {
 		return "Creating MP4"
 	case "encode a continuous MP4":
 		return "Encoding MP4"
+	case "create a repaired MP4":
+		return "Repairing MP4"
 	case "apply the custom MP4 options":
 		return "Applying options"
 	case "verify the processed copy":

@@ -167,6 +167,17 @@ If a playback copy already exists and the original FLV is retained, choose
 numbered MP4, keeps the previous copy, and updates history only after the new
 copy passes verification. Existing processed copies are never overwritten.
 
+If normal conversion fails, choose **Repair recording…** and review the
+explanation before clicking **Create repaired MP4**. This uses tolerant decoding
+and re-encodes the recording with the app's repair settings, ignoring custom
+output options. Damaged media may be skipped or reconstructed, so visual glitches,
+gaps, audio sync issues, or reduced quality can remain. A separate `.repaired.mp4`
+is checked from start to finish before it becomes the playback copy. The original
+FLV and all previous copies are always kept, including when automatic raw cleanup
+is enabled. Repairs share the conversion queue and can be stopped with **Cancel
+repair**. Failures show a readable toast and the same explanation in Logs;
+diagnostic details retain FFmpeg's error output.
+
 Leave **Custom FFmpeg output options** blank for automatic processing.
 The field accepts output options only. The app supplies the input and output
 paths. For example, `-map 0:v? -map 0:a? -c copy -movflags +faststart` copies
