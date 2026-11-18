@@ -62,6 +62,7 @@ type application struct {
 	clearHistoryOpen                bool
 	accountSettingsRequested        bool
 	toasts                          []string
+	processingFailures              []monitor.ProcessingFailure
 
 	addOpen, renameOpen, removeOpen              bool
 	addID, addName                               string
@@ -122,6 +123,7 @@ func (a *application) refreshVisible() bool {
 	snapshotChanged := false
 	if a.engine != nil {
 		a.snapshot, snapshotChanged = a.engine.SnapshotIfChanged(a.snapshot)
+		a.processingFailures = append(a.processingFailures, a.engine.TakeProcessingFailures()...)
 	}
 	if data, revision := a.store.DataSince(a.dataRevision); revision != a.dataRevision {
 		a.data, a.dataRevision = data, revision
@@ -140,17 +142,17 @@ func (a *application) refreshVisible() bool {
 		a.logList.Key, a.logList.CellMenu = nil, nil
 	}
 	a.pruneAvatars()
-	sidebarChanged := polling != a.snapshot.Polling
+	globalChanged := polling != a.snapshot.Polling || len(a.processingFailures) > 0
 	switch a.page {
 	case "logs":
-		return sidebarChanged || logRevision != a.logRevision || a.logStreamer != "" &&
+		return globalChanged || logRevision != a.logRevision || a.logStreamer != "" &&
 			streamerLogRow(previousRows, a.logStreamer) != streamerLogRow(a.snapshot.Rows, a.logStreamer)
 	case "recordings":
-		return sidebarChanged || processingRevision != a.snapshot.ProcessingRevision || dataRevision != a.dataRevision && !slices.Equal(records, a.data.Recordings)
+		return globalChanged || processingRevision != a.snapshot.ProcessingRevision || dataRevision != a.dataRevision && !slices.Equal(records, a.data.Recordings)
 	case "settings":
-		return sidebarChanged || queueTargets != a.snapshot.QueueTargets
+		return globalChanged || queueTargets != a.snapshot.QueueTargets
 	default:
-		return sidebarChanged || queueTargets != a.snapshot.QueueTargets || !slices.Equal(previousRows, a.snapshot.Rows)
+		return globalChanged || queueTargets != a.snapshot.QueueTargets || !slices.Equal(previousRows, a.snapshot.Rows)
 	}
 }
 
@@ -357,6 +359,17 @@ func (a *application) view(c *ui.Context) {
 		c.AddToast(ui.Toast{Title: message, Type: "success"})
 	}
 	a.toasts = nil
+	for _, failure := range a.processingFailures {
+		c.AddToast(ui.Toast{
+			Title:       "MP4 conversion failed",
+			Description: filepath.Base(failure.Path) + "\n" + failure.Message,
+			Type:        "error",
+			Timeout:     10 * time.Second,
+			Action:      "View logs",
+			OnAction:    func() { a.viewStreamerLogs(failure.StreamerID) },
+		})
+	}
+	a.processingFailures = nil
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		a.sidebar(c)
 		ui.Column(c).Grow(1).MinWidth(0).Padding(28).Gap(22).Children(func() {

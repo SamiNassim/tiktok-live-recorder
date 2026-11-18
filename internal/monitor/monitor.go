@@ -87,6 +87,7 @@ type Engine struct {
 	process            func(context.Context, string, state.Config, func(recording.Progress)) (recording.ProcessedCopy, error)
 	processingJobs     map[string]*processingJob
 	processingRevision uint64
+	processingFailures []ProcessingFailure
 }
 
 func New(store *state.Store, log *logging.Log) *Engine {

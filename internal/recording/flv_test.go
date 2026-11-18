@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/ffmpeg"
 	"tiktok-live-recorder/internal/state"
 )
@@ -292,7 +293,7 @@ func TestProcessingPreservesResolutionChanges(t *testing.T) {
 					cfg.FFmpegArgs = "-map 0:v:0 -c copy -bsf:v filter_units=remove_types=7|8"
 					copy, err := Process(ctx, input, cfg)
 					output := copy.Path
-					if err == nil || output != "" || !strings.Contains(err.Error(), "verify the processed copy") {
+					if err == nil || output != "" || !strings.Contains(fault.Details(err), "verify the processed copy") {
 						t.Fatal("broken video was authorized for raw cleanup", output, err)
 					}
 					if _, err := os.Stat(strings.TrimSuffix(input, ".flv") + ".processed.mp4"); !os.IsNotExist(err) {

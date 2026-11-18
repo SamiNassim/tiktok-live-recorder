@@ -6,12 +6,75 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 )
+
+func TestProcessingFailuresSurviveFastRetriesAndFullRecordingEvents(t *testing.T) {
+	s, log := fixture(t)
+	raw := filepath.Join(t.TempDir(), "source.flv")
+	const original = "synthetic original media"
+	if err := os.WriteFile(raw, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	row := state.Recording{ID: "done", StreamerID: "demo_creator", Path: raw, EndedAt: time.Now()}
+	if err := s.Update(func(d *state.Data) error { d.Recordings = []state.Recording{row}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	e := &Engine{store: s, log: log, ctx: ctx, cancel: cancel, events: make(chan Event, 1), processing: make(chan struct{}, 2)}
+	t.Cleanup(e.Close)
+	e.events <- Event{Name: "Synthetic recording"}
+	const reason = "The recording contains damaged or incomplete media data; raw FLV kept"
+	e.process = func(context.Context, string, state.Config, func(recording.Progress)) (recording.ProcessedCopy, error) {
+		return recording.ProcessedCopy{}, fault.Action(reason, errors.New("synthetic decoder failure"))
+	}
+	before := e.Snapshot()
+	for range 2 {
+		if err := e.RetryProcessing(row.ID); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return !e.IsProcessing(raw) })
+	}
+	if _, changed := e.SnapshotIfChanged(before); !changed {
+		t.Fatal("completed failures did not request a UI refresh")
+	}
+	failures := e.TakeProcessingFailures()
+	if len(failures) != 2 {
+		t.Fatal("fast or repeated failure was lost", failures)
+	}
+	for _, failure := range failures {
+		if failure.StreamerID != row.StreamerID || failure.Path != raw || failure.Message != reason {
+			t.Fatal("failure lost its recording or readable reason", failure)
+		}
+	}
+	if len(e.TakeProcessingFailures()) != 0 {
+		t.Fatal("a failure was delivered twice")
+	}
+	if s.Data().Recordings[0].Error != reason || s.Data().Recordings[0].ProcessedPath != "" {
+		t.Fatal("failed conversion was not retained in history")
+	}
+	logged := 0
+	for _, entry := range log.Entries() {
+		if entry.Message == "Processed copy failed: "+reason {
+			if entry.Level != "ERROR" || entry.Streamer != row.StreamerID || !strings.Contains(entry.Details, "synthetic decoder failure") {
+				t.Fatal("manual failure log lost its context or diagnostic cause", entry)
+			}
+			logged++
+		}
+	}
+	if logged != 2 {
+		t.Fatal("each manual failure must log the same clear reason as the toast", logged)
+	}
+	if data, err := os.ReadFile(raw); err != nil || string(data) != original {
+		t.Fatal("failed retry changed the original", err)
+	}
+}
 
 func TestRetryProcessingUsesBoundedQueueAndCancelsQueuedJobs(t *testing.T) {
 	s, log := fixture(t)
@@ -323,6 +386,9 @@ func TestConversionProgressSnapshotsAndIndividualCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return !e.IsProcessing(rows[0].Path) })
+	if len(e.TakeProcessingFailures()) != 0 {
+		t.Fatal("an explicitly canceled conversion was reported as a failure")
+	}
 	if !e.IsProcessing(rows[1].Path) || e.ctx.Err() != nil {
 		t.Fatal("canceling one conversion affected another job or the engine")
 	}

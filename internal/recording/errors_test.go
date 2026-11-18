@@ -31,9 +31,48 @@ func TestFailedFFmpegProcessingRetainsStderrAndRawFile(t *testing.T) {
 	if err == nil || !fault.RequiresAction(err) || !strings.Contains(fault.Details(err), "FFmpeg output:") || !strings.Contains(err.Error(), "raw FLV kept") {
 		t.Fatal("processing failure lost its diagnostics or raw-preservation message", err)
 	}
+	if !strings.Contains(fault.Reason(err), "damaged or incomplete media data") {
+		t.Fatal("invalid media was not explained clearly", err)
+	}
+	if outputs, _ := filepath.Glob(filepath.Join(filepath.Dir(source), "*.mp4")); len(outputs) != 0 {
+		t.Fatal("failed conversion published an MP4", outputs)
+	}
 	got, err := os.ReadFile(source)
 	if err != nil || !bytes.Equal(got, raw) {
 		t.Fatal("logging changes affected raw preservation", err)
+	}
+}
+
+func TestProcessingMessagesExplainDamagedMediaWithoutExposingDiagnostics(t *testing.T) {
+	for _, stderr := range []string{
+		"Invalid data found when processing input",
+		"[h264] error while decoding MB 2 3, bytestream -5",
+		"corrupt decoded frame in stream 0",
+		"Packet corrupt (stream = 0, dts = 100)",
+		"Invalid NAL unit size (0 > 12)",
+	} {
+		err := processingFailure(nil, errors.New("synthetic exit failure"), stderr, "verify the processed copy")
+		if got := fault.Reason(err); got != "The recording contains damaged or incomplete media data; raw FLV kept" {
+			t.Fatalf("unexpected media error: %q", got)
+		}
+		if !strings.Contains(fault.Details(err), stderr) {
+			t.Fatal("media diagnostics were lost", err)
+		}
+		if !strings.Contains(fault.Details(err), "verify the processed copy") {
+			t.Fatal("readable media error lost the diagnostic failure stage", err)
+		}
+	}
+	// Local setup errors take precedence even when FFmpeg also mentions input.
+	for _, test := range []struct{ stderr, want string }{
+		{"No space left on device\nInvalid data found when processing input", "disk is full"},
+		{"Permission denied\nInvalid data found when processing input", "access to the file was denied"},
+		{"Unknown encoder 'synthetic'", "selected encoder is unavailable"},
+		{"Unrecognized option 'synthetic'", "check the custom output options"},
+	} {
+		err := processingFailure(nil, errors.New("synthetic exit failure"), test.stderr, "create the processed copy")
+		if got := fault.Reason(err); !strings.Contains(got, test.want) || strings.Contains(got, "damaged") {
+			t.Fatal("setup failure was mislabeled as media damage", got)
+		}
 	}
 }
 

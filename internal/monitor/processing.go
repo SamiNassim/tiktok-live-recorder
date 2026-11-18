@@ -32,6 +32,22 @@ type processingJob struct {
 	tracker     conversionProgress
 }
 
+// ProcessingFailure is a completed conversion failure awaiting UI feedback.
+type ProcessingFailure struct {
+	StreamerID, Path, Message string
+}
+
+// TakeProcessingFailures delivers each failure once, including jobs that finish
+// between UI snapshots or repeat the same error on a later retry. Keeping these
+// separate from the recording-start channel avoids dropping errors when it fills.
+func (e *Engine) TakeProcessingFailures() []ProcessingFailure {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	failures := e.processingFailures
+	e.processingFailures = nil
+	return failures
+}
+
 // RetryProcessing uses the same bounded converter queue as newly completed
 // recordings. An explicit retry also works when automatic processing is off.
 func (e *Engine) RetryProcessing(recordingID string) error {
@@ -202,6 +218,12 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 				level = "ERROR"
 			}
 			e.log.WriteError(level, id, "Processed copy failed: "+fault.Reason(err), err)
+			if !errors.Is(err, context.Canceled) {
+				e.mu.Lock()
+				e.processingFailures = append(e.processingFailures, ProcessingFailure{StreamerID: id, Path: source, Message: fault.Reason(err)})
+				e.processingRevision++
+				e.mu.Unlock()
+			}
 			return
 		}
 		deleted, err := e.store.CompleteProcessing(source, path, deleteRaw, func() error {

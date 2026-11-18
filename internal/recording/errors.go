@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"tiktok-live-recorder/internal/fault"
@@ -16,7 +17,8 @@ func processingFailure(ctxErr, err error, stderr, operation string) error {
 		}
 		return fault.Wrap(message, errors.Join(ctxErr, ffmpegCause(err, stderr)))
 	}
-	return fault.Action(ffmpegMessage(operation, stderr)+"; raw FLV kept", ffmpegCause(err, stderr))
+	return fault.Action(ffmpegMessage(operation, stderr)+"; raw FLV kept",
+		fmt.Errorf("FFmpeg could not %s: %w", operation, ffmpegCause(err, stderr)))
 }
 
 func ffmpegCause(err error, stderr string) error {
@@ -41,6 +43,12 @@ func ffmpegMessage(operation, stderr string) string {
 		return message + ": the selected encoder is unavailable in this FFmpeg installation"
 	case strings.Contains(text, "unrecognized option"), strings.Contains(text, "error splitting the argument list"):
 		return message + ": check the custom output options"
+	case strings.Contains(text, "invalid data found when processing input"),
+		strings.Contains(text, "error while decoding"),
+		strings.Contains(text, "corrupt decoded frame"),
+		strings.Contains(text, "packet corrupt"),
+		strings.Contains(text, "invalid nal unit"):
+		return "The recording contains damaged or incomplete media data"
 	default:
 		return message + ". The diagnostic log contains FFmpeg's error output"
 	}
