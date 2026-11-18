@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +44,8 @@ func TestProcessingInputPreservesHeadersMetadataAudioAndPartialTail(t *testing.T
 		}
 		got, err := io.ReadAll(input)
 		input.Close()
-		if err != nil || !bytes.Equal(got, raw) {
+		var truncated *flvTruncatedTail
+		if !bytes.Equal(got, raw) || (trim == 1 || trim == 8) != errors.As(err, &truncated) || err != nil && !errors.As(err, &truncated) {
 			t.Fatal("processing discarded unrelated bytes or a partial final tag", trim, err)
 		}
 	}

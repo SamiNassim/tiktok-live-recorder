@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,8 +212,12 @@ func TestProcessingCreatesSeparateCopyAndPreservesRawHash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Process(ctx, source, cfg); err == nil {
-			t.Fatal("processing overwrote an existing copy")
+		next, err := Process(ctx, source, cfg)
+		if err != nil || next.Path == processed || !strings.HasSuffix(next.Path, ".processed-2.mp4") {
+			t.Fatal("reconversion did not create a separate numbered copy", next.Path, err)
+		}
+		if info, err := os.Stat(next.Path); err != nil || info.Size() == 0 {
+			t.Fatal("new processed copy is missing", err)
 		}
 		afterCopy, err := os.ReadFile(processed)
 		if err != nil || !bytes.Equal(beforeCopy, afterCopy) {

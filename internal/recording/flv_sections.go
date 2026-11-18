@@ -159,7 +159,7 @@ func splitFLV(ctx context.Context, source, dir string) ([]flvSection, error) {
 		}
 		var h [11]byte
 		if _, err := io.ReadFull(in, h[:]); err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				break
 			}
 			return nil, err
@@ -167,8 +167,21 @@ func splitFLV(ctx context.Context, source, dir string) ([]flvSection, error) {
 		size := int(h[1])<<16 | int(h[2])<<8 | int(h[3])
 		tag = append(tag[:0], h[:]...)
 		tag = append(tag, make([]byte, size+4)...)
-		if _, err := io.ReadFull(in, tag[11:]); err != nil {
-			return nil, err
+		if n, err := io.ReadFull(in, tag[11:]); err != nil {
+			// A transport interruption can leave a final partial packet. Only
+			// complete tags go into the derived inputs, and the original stays
+			// available after recovery for any future repair attempt.
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				if n < size {
+					break
+				}
+				// The media payload is complete when only PreviousTagSize is
+				// missing. Rebuild that framing in the temporary input so a
+				// fully received final picture or audio packet also survives.
+				binary.BigEndian.PutUint32(tag[len(tag)-4:], uint32(size+11))
+			} else {
+				return nil, err
+			}
 		}
 		payload := tag[11 : 11+size]
 		stamp := flvTimestamp(h[:])
@@ -223,7 +236,10 @@ func splitFLV(ctx context.Context, source, dir string) ([]flvSection, error) {
 					return nil, err
 				}
 			}
-			if hasVideoTime && stamp <= lastVideo && (!replayVideo || key) {
+			// Equal decode times can occur on distinct interframes. Keep them
+			// in the same decoder section; recovery repairs presentation times
+			// after decoding. An equal keyframe may still be replayed footage.
+			if hasVideoTime && (stamp < lastVideo || stamp == lastVideo && key) && (!replayVideo || key) {
 				wasReplay := replayVideo
 				if !key {
 					return nil, errors.New("FLV video timestamps reset outside a keyframe")

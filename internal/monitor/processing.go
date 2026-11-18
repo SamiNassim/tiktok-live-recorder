@@ -5,25 +5,141 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"tiktok-live-recorder/internal/fault"
+	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 )
+
+type ProcessingState struct {
+	Queued     bool
+	Cancelable bool
+	StartedAt  time.Time
+	Progress   recording.Progress
+	Pass       int
+	Passes     int
+	Percent    int // Current pass; -1 when its duration is unknown.
+	Overall    int // Estimated work across all planned passes; -1 if unknown.
+}
+
+type processingJob struct {
+	ProcessingState
+	recordingID string
+	cancel      context.CancelFunc
+	tracker     conversionProgress
+}
+
+// RetryProcessing uses the same bounded converter queue as newly completed
+// recordings. An explicit retry also works when automatic processing is off.
+func (e *Engine) RetryProcessing(recordingID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.ctx.Err(); err != nil {
+		return err
+	}
+	rows := e.store.Data().Recordings
+	i := slices.IndexFunc(rows, func(r state.Recording) bool { return r.ID == recordingID })
+	if i < 0 {
+		return errors.New("recording is no longer in history")
+	}
+	r := rows[i]
+	if r.EndedAt.IsZero() || r.RawDeleted || r.Path == "" {
+		return errors.New("choose a completed recording whose original FLV is still available")
+	}
+	if e.processingJobs[r.Path] != nil {
+		return errors.New("this recording is already queued for MP4 conversion")
+	}
+	info, err := os.Lstat(r.Path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 13 || !strings.EqualFold(filepath.Ext(r.Path), ".flv") {
+		return fault.Action("the original FLV is missing or cannot be read for conversion", err)
+	}
+	e.processCopy(r.StreamerID, r.Path, e.store.Config())
+	return nil
+}
+
+func (e *Engine) IsProcessing(source string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.processingJobs[source] != nil
+}
+
+// CancelProcessing interrupts one queued or running conversion independently
+// of recording and monitoring. Its original and any previous copy are kept.
+func (e *Engine) CancelProcessing(recordingID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, job := range e.processingJobs {
+		if job.recordingID == recordingID {
+			if !job.Cancelable {
+				return errors.New("this conversion has already finished")
+			}
+			job.cancel()
+			job.Queued, job.Cancelable = false, false
+			job.Progress.Phase = "Canceling conversion"
+			job.Percent = -1
+			e.processingRevision++
+			return nil
+		}
+	}
+	return errors.New("this recording is no longer queued for conversion")
+}
 
 // processCopy runs independently of the discovery queue and the raw recorder.
 // Limit concurrent converters; shutdown cancels both running and queued jobs.
 // The caller holds e.mu, so the processor and recording settings are captured
 // before another UI operation can change them.
 func (e *Engine) processCopy(id, source string, cfg state.Config) {
+	if e.processingJobs == nil {
+		e.processingJobs = make(map[string]*processingJob)
+	}
+	if e.processingJobs[source] != nil || e.ctx.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(e.ctx)
+	job := &processingJob{
+		ProcessingState: ProcessingState{Queued: true, Cancelable: true, Passes: 2, Percent: -1, Overall: -1},
+		cancel:          cancel,
+		tracker:         conversionProgress{custom: strings.TrimSpace(cfg.FFmpegArgs) != ""},
+	}
+	for _, r := range e.store.Data().Recordings {
+		if r.Path == source {
+			job.recordingID = r.ID
+			if !r.StartedAt.IsZero() && r.EndedAt.After(r.StartedAt) {
+				job.tracker.sourceDuration = r.EndedAt.Sub(r.StartedAt)
+			}
+			break
+		}
+	}
+	e.processingJobs[source] = job
+	e.processingRevision++
 	process := e.process
 	e.wg.Go(func() {
+		defer func() {
+			cancel()
+			e.mu.Lock()
+			if e.processingJobs[source] == job {
+				delete(e.processingJobs, source)
+			}
+			e.processingRevision++
+			e.mu.Unlock()
+		}()
 		select {
 		case e.processing <- struct{}{}:
 			defer func() { <-e.processing }()
-		case <-e.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
+		e.mu.Lock()
+		job.Queued, job.StartedAt = false, time.Now()
+		job.Progress = recording.Progress{Phase: "Preparing conversion"}
+		e.processingRevision++
+		e.mu.Unlock()
 		deleteRaw := cfg.PostProcess && cfg.DeleteRawAfterProcessing
 		var original os.FileInfo
 		var originalErr error
@@ -31,12 +147,23 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			original, originalErr = snapshotFile(source)
 		}
 		e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
-		copy, err := process(e.ctx, source, cfg)
+		copy, err := process(ctx, source, cfg, func(progress recording.Progress) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if ctx.Err() == nil && e.processingJobs[source] == job && job.Progress != progress {
+				job.Progress = progress
+				job.Pass, job.Passes, job.Percent, job.Overall = job.tracker.update(progress)
+				e.processingRevision++
+			}
+		})
 		path := copy.Path
 		deleteRaw = deleteRaw && !copy.Reencoded
 		if e.ctx.Err() != nil {
 			e.log.Write("INFO", id, "Processing interrupted on shutdown; raw FLV is preserved")
 			return
+		}
+		if ctx.Err() != nil {
+			err = fault.Wrap("MP4 conversion canceled; raw FLV kept", ctx.Err())
 		}
 		var copyInfo os.FileInfo
 		if err == nil {
@@ -44,6 +171,21 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			if err != nil || !copyInfo.Mode().IsRegular() || copyInfo.Size() == 0 {
 				err = fault.Action("the processed copy is missing or invalid; raw FLV kept", err)
 			}
+		}
+		if err == nil {
+			// Cancellation and the history/cleanup commit have one ordering.
+			// Once a verified copy is ready to commit, a late cancel cannot
+			// report the completed conversion as canceled after raw cleanup.
+			e.mu.Lock()
+			if ctx.Err() != nil {
+				err = fault.Wrap("MP4 conversion canceled; raw FLV kept", ctx.Err())
+			} else {
+				job.Cancelable = false
+				job.Progress = recording.Progress{Phase: "Finishing conversion"}
+				job.Percent, job.Overall = -1, 99
+				e.processingRevision++
+			}
+			e.mu.Unlock()
 		}
 		if err != nil {
 			e.persist(func(d *state.Data) {
@@ -54,7 +196,9 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 				}
 			})
 			level := "WARN"
-			if fault.RequiresAction(err) {
+			if errors.Is(err, context.Canceled) {
+				level = "INFO"
+			} else if fault.RequiresAction(err) {
 				level = "ERROR"
 			}
 			e.log.WriteError(level, id, "Processed copy failed: "+fault.Reason(err), err)
@@ -64,7 +208,7 @@ func (e *Engine) processCopy(id, source string, cfg state.Config) {
 			if originalErr != nil {
 				return fault.Wrap("the original FLV could not be checked before cleanup", originalErr)
 			}
-			return removeProcessedRaw(e.ctx, source, path, original, copyInfo)
+			return removeProcessedRaw(ctx, source, path, original, copyInfo)
 		})
 		if deleted {
 			e.log.Write("INFO", id, "Processed copy ready; original FLV deleted")

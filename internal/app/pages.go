@@ -282,7 +282,23 @@ func (a *application) recordings(c *ui.Context) {
 				if r.RawDeleted {
 					rawLabel = "Original FLV (deleted after processing): "
 				}
-				ui.Text(c, filepath.Base(recordingPlaybackPath(r))).FontSize(11).SingleLine().Tooltip(rawLabel + r.Path + "\nPlayback copy: " + r.ProcessedPath + "\n" + r.Error)
+				// Reserve the same two-line space throughout a conversion so
+				// progress updates and completion never move neighboring rows.
+				ui.Column(c).Grow(1).MinWidth(0).Height(44).Justify(ui.Center).Gap(3).Padding(7, 0).Children(func() {
+					tooltip := rawLabel + r.Path + "\nPlayback copy: " + r.ProcessedPath + "\n" + r.Error
+					if job, ok := a.snapshot.Processing[r.Path]; ok {
+						tooltip += "\n" + conversionDetails(job, c.Now())
+						if !job.StartedAt.IsZero() {
+							if row >= first && row <= last {
+								refreshClock(c, c.Now().Sub(job.StartedAt), false)
+							}
+						}
+						ui.Text(c, "Creating MP4…").FontSize(12).SingleLine().Tooltip(tooltip)
+						ui.Text(c, conversionStatus(job)).FontSize(11).TextColor(t.Warning).SingleLine().Tooltip(tooltip)
+					} else {
+						ui.Text(c, filepath.Base(recordingPlaybackPath(r))).FontSize(11).SingleLine().Tooltip(tooltip)
+					}
+				})
 			case 5:
 				if ui.Button(c, "Show").Clicked() {
 					a.reveal(recordingPlaybackPath(r))

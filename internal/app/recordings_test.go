@@ -1,13 +1,18 @@
 package app
 
 import (
+	"fmt"
+	"image/png"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"tiktok-live-recorder/internal/monitor"
+	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 )
 
@@ -131,6 +136,38 @@ func TestRecordingMenusCoverFullRowAndCopyPath(t *testing.T) {
 	tt.CloseMenu()
 }
 
+func TestRecordingConversionMenuAvailability(t *testing.T) {
+	a := accountFixture(t)
+	a.page = "recordings"
+	now := time.Now()
+	a.data.Recordings = []state.Recording{
+		{ID: "failed", Name: "Failed Demo", Path: "failed.flv", EndedAt: now, Error: "Synthetic processing error"},
+		{ID: "raw", Name: "Raw Demo", Path: "raw.flv", EndedAt: now},
+		{ID: "active", Name: "Active Demo", Path: "active.flv"},
+		{ID: "deleted", Name: "Deleted Demo", Path: "deleted.flv", EndedAt: now, RawDeleted: true},
+	}
+	tt := ui.NewTester(a.view, 1400, 900)
+	for _, test := range []struct{ name, action string }{
+		{"Failed Demo", "Retry MP4 conversion"},
+		{"Raw Demo", "Convert to MP4"},
+		{"Active Demo", "Convert to MP4"},
+		{"Deleted Demo", "Convert to MP4"},
+	} {
+		label, ok := tt.Find(test.name)
+		if !ok {
+			t.Fatal("recording row missing", test.name)
+		}
+		tt.RightClickAt(label.X, label.Y+label.H/2)
+		if !slices.Contains(tt.Menu(), test.action) {
+			t.Fatal("conversion action missing", test.name, tt.Menu())
+		}
+		if err := tt.ChooseMenuItem(test.action); err == nil {
+			t.Fatal("conversion enabled in preview or for an unavailable original", test.name)
+		}
+		tt.CloseMenu()
+	}
+}
+
 func TestClearRecordingHistoryConfirmationAndAvailability(t *testing.T) {
 	a := accountFixture(t)
 	a.preview = false // No account cookie or engine; only local history controls run.
@@ -170,4 +207,105 @@ func TestClearRecordingHistoryConfirmationAndAvailability(t *testing.T) {
 	if a.clearHistoryOpen || len(a.data.Recordings) != 2 {
 		t.Fatal("cancel changed history")
 	}
+}
+
+func TestRecordingRowsShowLiveConversionProgressAndReconversion(t *testing.T) {
+	for _, theme := range []string{"dark", "light"} {
+		for _, width := range []int{1050, 1400} {
+			t.Run(fmt.Sprintf("%s-%d", theme, width), func(t *testing.T) {
+				testRecordingConversionRow(t, theme, width)
+			})
+		}
+	}
+}
+
+func testRecordingConversionRow(t *testing.T, theme string, width int) {
+	t.Helper()
+	a := accountFixture(t)
+	a.cfg.Theme = theme
+	a.page = "recordings"
+	now := time.Now()
+	r := state.Recording{ID: "completed", Name: "Synthetic conversion", Path: "source.flv", ProcessedPath: "previous.mp4", StartedAt: now.Add(-time.Hour), EndedAt: now}
+	a.data.Recordings = []state.Recording{r, {ID: "neighbor", Name: "Neighboring recording", Path: "neighbor.flv", StartedAt: now.Add(-2 * time.Hour), EndedAt: now}}
+	tt := ui.NewTester(a.view, width, 650)
+	anchors := make(map[string]ui.Rect)
+	for _, text := range []string{r.Name, "Neighboring recording", "File"} {
+		anchors[text], _ = tt.Find(text)
+	}
+	checkLayout := func() {
+		t.Helper()
+		for text, before := range anchors {
+			if after, ok := tt.Find(text); !ok || after != before {
+				t.Fatalf("conversion moved %q: before=%+v, after=%+v", text, before, after)
+			}
+		}
+	}
+	a.snapshot.Processing = map[string]monitor.ProcessingState{r.Path: {Queued: true, Overall: -1}}
+	tt.Frame()
+	if !tt.HasText("Queued…") || !tt.HasText("Creating MP4…") {
+		t.Fatal("queued conversion is missing its two-line status")
+	}
+	checkLayout()
+	job := monitor.ProcessingState{StartedAt: now.Add(-2 * time.Minute), Pass: 3, Passes: 4, Percent: 50, Overall: 62, Progress: recording.Progress{Phase: "Encoding MP4", MediaTime: 12*time.Minute + 34*time.Second, Speed: 1.25}}
+	a.snapshot.Processing[r.Path] = job
+	tt.Frame()
+	checkLayout()
+	for _, text := range []string{"Creating MP4…", "Encoding 62%"} {
+		rect, ok := tt.Find(text)
+		if !ok || rect.X+rect.W > float32(width) || rect.Y+rect.H > 650 {
+			t.Fatalf("conversion progress missing or clipped: %q, %+v", text, rect)
+		}
+	}
+	percentages := 0
+	for _, text := range tt.Texts() {
+		percentages += strings.Count(text, "%")
+		if strings.Contains(text, "Pass ") || strings.Contains(text, "overall") {
+			t.Fatalf("extra conversion line is visible: %q", text)
+		}
+	}
+	if percentages != 1 {
+		t.Fatalf("conversion must show only its overall percentage, got %d", percentages)
+	}
+	for _, text := range []string{"Processed this pass: 12m 34s", "Speed: 1.2×", "Elapsed: 2m", "Recovery can add passes"} {
+		if !strings.Contains(conversionDetails(job, now), text) {
+			t.Fatalf("conversion details missing %q", text)
+		}
+	}
+	if dir := os.Getenv("TIKTOK_UI_SNAPSHOTS"); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("conversion-%s-%d.png", theme, width)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = png.Encode(f, tt.Image())
+		closeErr := f.Close()
+		if err != nil || closeErr != nil {
+			t.Fatal(err, closeErr)
+		}
+	}
+	label, _ := tt.Find(r.Name)
+	tt.RightClickAt(label.X, label.Y+label.H/2)
+	if !slices.Contains(tt.Menu(), "Cancel conversion") {
+		t.Fatal("active conversion has no cancellation action")
+	}
+	tt.CloseMenu()
+	for _, phase := range []string{"Preparing recovery", "Verifying MP4", "Saving MP4", "Finishing conversion", "Canceling conversion"} {
+		job.Progress.Phase = phase
+		a.snapshot.Processing[r.Path] = job
+		tt.Frame()
+		checkLayout()
+	}
+	a.snapshot.Processing = nil
+	tt.Frame()
+	checkLayout()
+	if !tt.HasText("previous.mp4") {
+		t.Fatal("completed conversion did not restore the playback filename")
+	}
+	tt.RightClickAt(label.X, label.Y+label.H/2)
+	if !slices.Contains(tt.Menu(), "Convert again") {
+		t.Fatal("existing playback copy cannot be converted again")
+	}
+	tt.CloseMenu()
 }

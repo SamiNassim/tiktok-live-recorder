@@ -31,6 +31,8 @@ type Snapshot struct {
 	Rows                                                       []Row
 	Recording, MonitoringPaused, RecordingPaused, QueueTargets int
 	Polling                                                    bool
+	ProcessingRevision                                         uint64
+	Processing                                                 map[string]ProcessingState
 }
 type Event struct{ Name, StreamerID, Path string }
 type streamClient interface {
@@ -60,19 +62,21 @@ type item struct {
 	recoveryUntil time.Time
 }
 type Engine struct {
-	store      *state.Store
-	log        *logging.Log
-	client     streamClient
-	start      startRecording
-	ctx        context.Context
-	cancel     context.CancelFunc
-	mu         sync.Mutex
-	items      map[string]*item
-	wake       chan struct{}
-	events     chan Event
-	wg         sync.WaitGroup
-	processing chan struct{}
-	process    func(context.Context, string, state.Config) (recording.ProcessedCopy, error)
+	store              *state.Store
+	log                *logging.Log
+	client             streamClient
+	start              startRecording
+	ctx                context.Context
+	cancel             context.CancelFunc
+	mu                 sync.Mutex
+	items              map[string]*item
+	wake               chan struct{}
+	events             chan Event
+	wg                 sync.WaitGroup
+	processing         chan struct{}
+	process            func(context.Context, string, state.Config, func(recording.Progress)) (recording.ProcessedCopy, error)
+	processingJobs     map[string]*processingJob
+	processingRevision uint64
 }
 
 func New(store *state.Store, log *logging.Log) *Engine {
@@ -82,7 +86,7 @@ func New(store *state.Store, log *logging.Log) *Engine {
 }
 func newEngine(store *state.Store, log *logging.Log, client streamClient, start startRecording) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64), processing: make(chan struct{}, 2), process: recording.Process}
+	e := &Engine{store: store, log: log, client: client, start: start, ctx: ctx, cancel: cancel, items: make(map[string]*item), wake: make(chan struct{}, 1), events: make(chan Event, 64), processing: make(chan struct{}, 2), process: recording.ProcessWithProgress}
 	e.recoverHistory()
 	e.configure(store.Config())
 	e.wg.Add(1)
@@ -99,7 +103,12 @@ func (e *Engine) wakeUp() {
 func (e *Engine) configure(c state.Config) {
 	e.client.Configure(c.Cookie, time.Duration(c.RequestDelaySeconds)*time.Second)
 }
-func (e *Engine) Close() { e.cancel(); e.wg.Wait() }
+func (e *Engine) Close() {
+	e.mu.Lock()
+	e.cancel()
+	e.mu.Unlock()
+	e.wg.Wait()
+}
 
 func (e *Engine) SaveConfig(c state.Config) error {
 	var err error
@@ -250,6 +259,7 @@ func (e *Engine) snapshot(previous *Snapshot) (Snapshot, bool) {
 	s := Snapshot{Polling: e.store.Config().PollingEnabled}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	s.ProcessingRevision = e.processingRevision
 	for _, it := range e.items {
 		if it.handle != nil && it.row.Status == "Recording" {
 			s.Recording++
@@ -264,7 +274,7 @@ func (e *Engine) snapshot(previous *Snapshot) (Snapshot, bool) {
 			s.RecordingPaused++
 		}
 	}
-	if previous != nil && s.Polling == previous.Polling &&
+	if previous != nil && s.Polling == previous.Polling && s.ProcessingRevision == previous.ProcessingRevision &&
 		s.Recording == previous.Recording && s.QueueTargets == previous.QueueTargets &&
 		s.MonitoringPaused == previous.MonitoringPaused && s.RecordingPaused == previous.RecordingPaused &&
 		len(previous.Rows) == len(e.items) {
@@ -282,6 +292,14 @@ func (e *Engine) snapshot(previous *Snapshot) (Snapshot, bool) {
 	s.Rows = make([]Row, 0, len(e.items))
 	for _, it := range e.items {
 		s.Rows = append(s.Rows, it.row)
+	}
+	if previous != nil && previous.ProcessingRevision == s.ProcessingRevision {
+		s.Processing = previous.Processing
+	} else if len(e.processingJobs) > 0 {
+		s.Processing = make(map[string]ProcessingState, len(e.processingJobs))
+		for path, job := range e.processingJobs {
+			s.Processing[path] = job.ProcessingState
+		}
 	}
 	return s, true
 }

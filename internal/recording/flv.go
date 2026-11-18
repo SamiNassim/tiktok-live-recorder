@@ -53,6 +53,12 @@ type processingFLV struct {
 	err     error
 }
 
+type flvTruncatedTail struct{ offset int64 }
+
+func (e *flvTruncatedTail) Error() string {
+	return fmt.Sprintf("FLV ends in an incomplete tag at byte %d", e.offset)
+}
+
 func (r *processingFLV) Close() error { return r.source.Close() }
 
 func (r *processingFLV) Read(p []byte) (int, error) {
@@ -79,11 +85,12 @@ func (r *processingFLV) next() error {
 	var header [11]byte
 	n, err := io.ReadFull(r.source, header[:])
 	if err != nil {
-		// Keep a partial tail visible to FFmpeg, including its strict cleanup
-		// verification. Never silently discard bytes from an interrupted tag.
+		// Keep every byte visible to FFmpeg, but report an interrupted tag so
+		// only the recovery path can omit its incomplete tail. Recovery always
+		// retains the original, even when its complete pictures can be saved.
 		r.pending, r.err = append(r.output[:0], header[:n]...), err
 		if errors.Is(err, io.ErrUnexpectedEOF) {
-			r.err = io.EOF
+			r.err = &flvTruncatedTail{r.offset}
 		}
 		if n == 0 {
 			return err
@@ -96,8 +103,8 @@ func (r *processingFLV) next() error {
 	n, err = io.ReadFull(r.source, r.input[11:])
 	if err != nil {
 		r.pending, r.err = r.input[:11+n], err
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			r.err = io.EOF
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			r.err = &flvTruncatedTail{r.offset}
 		}
 		return nil
 	}

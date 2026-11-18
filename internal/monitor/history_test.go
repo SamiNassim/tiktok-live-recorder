@@ -40,7 +40,7 @@ func TestProcessingCompletionDoesNotRestoreClearedHistory(t *testing.T) {
 	defer e.Close()
 	started, release := make(chan struct{}), make(chan struct{})
 	e.mu.Lock()
-	e.process = func(ctx context.Context, _ string, _ state.Config) (recording.ProcessedCopy, error) {
+	e.process = func(ctx context.Context, _ string, _ state.Config, _ func(recording.Progress)) (recording.ProcessedCopy, error) {
 		close(started)
 		select {
 		case <-release:

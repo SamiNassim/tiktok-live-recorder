@@ -12,7 +12,7 @@ func processingFailure(ctxErr, err error, stderr, operation string) error {
 	if ctxErr != nil {
 		message := "Processing was interrupted; raw FLV kept"
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
-			message = "Processing exceeded its 30-minute time limit; raw FLV kept"
+			message = "Processing timed out; raw FLV kept"
 		}
 		return fault.Wrap(message, errors.Join(ctxErr, ffmpegCause(err, stderr)))
 	}

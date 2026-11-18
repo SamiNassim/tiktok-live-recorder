@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 
 	"tiktok-live-recorder/internal/fault"
@@ -113,7 +112,14 @@ type ProcessedCopy struct {
 
 var ffmpegBase = []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-n"}
 
-func Process(parent context.Context, source string, cfg state.Config) (ProcessedCopy, error) {
+func Process(ctx context.Context, source string, cfg state.Config) (ProcessedCopy, error) {
+	return ProcessWithProgress(ctx, source, cfg, nil)
+}
+
+// ProcessWithProgress reports phase changes and FFmpeg's actual media clock.
+// It shares Process's publication, verification and raw-preservation rules.
+func ProcessWithProgress(ctx context.Context, source string, cfg state.Config, report func(Progress)) (ProcessedCopy, error) {
+	reportPhase(report, "Preparing conversion")
 	args, err := OutputArgs(cfg.FFmpegArgs)
 	if err != nil {
 		return ProcessedCopy{}, fault.Action("could not create the processed copy; check the custom FFmpeg output options. Raw FLV kept", err)
@@ -122,9 +128,9 @@ func Process(parent context.Context, source string, cfg state.Config) (Processed
 	if err != nil {
 		return ProcessedCopy{}, fault.Action("could not create the processed copy; install or select FFmpeg in Settings. Raw FLV kept", err)
 	}
-	target := strings.TrimSuffix(source, filepath.Ext(source)) + ".processed.mp4"
-	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return ProcessedCopy{}, fault.Action("the processed output already exists or cannot be checked; raw FLV kept", err)
+	target, err := nextProcessedPath(source)
+	if err != nil {
+		return ProcessedCopy{}, fault.Action("could not choose a separate processed output; raw FLV kept", err)
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(target), ".processing-")
 	if err != nil {
@@ -132,8 +138,6 @@ func Process(parent context.Context, source string, cfg state.Config) (Processed
 	}
 	defer os.RemoveAll(stage)
 	staged := filepath.Join(stage, "recording.mp4")
-	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
-	defer cancel()
 
 	outputArgs := []string{"-map", "0:v?", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart"}
 	if len(args) > 0 {
@@ -141,19 +145,20 @@ func Process(parent context.Context, source string, cfg state.Config) (Processed
 	}
 	var codecChange *videoCodecChange
 	var rewind *flvTimestampRewind
-	err = copyFLV(ctx, path, source, staged, outputArgs)
+	var truncated *flvTruncatedTail
+	err = copyFLV(ctx, path, source, staged, outputArgs, report)
 	reencoded := false
 	if err == nil {
-		err = verifyCopy(ctx, path, staged)
+		err = verifyCopyProgress(ctx, path, staged, report)
 	}
 	// The original remains available even when recovery needs to change the
 	// encoded picture or repair the timeline.
-	if ctx.Err() == nil && err != nil && (errors.As(err, &codecChange) || errors.As(err, &rewind) || len(args) == 0 && canRecoverMP4(err)) {
+	if ctx.Err() == nil && err != nil && (errors.As(err, &codecChange) || errors.As(err, &rewind) || errors.As(err, &truncated) || canRecoverMP4(err)) {
 		if removeErr := os.Remove(staged); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return ProcessedCopy{}, fault.Action("Could not clear the incomplete MP4. Raw FLV kept", errors.Join(removeErr, err))
 		}
 		recovered := filepath.Join(stage, "recovered.mp4")
-		if recoverErr := recoverMP4(ctx, path, source, recovered); recoverErr != nil {
+		if recoverErr := recoverMP4Progress(ctx, path, source, recovered, report); recoverErr != nil {
 			if ctx.Err() != nil {
 				return ProcessedCopy{}, processingFailure(ctx.Err(), recoverErr, "", "recover the processed copy")
 			}
@@ -162,17 +167,18 @@ func Process(parent context.Context, source string, cfg state.Config) (Processed
 		reencoded = true
 		if len(args) > 0 {
 			custom := filepath.Join(stage, "custom.mp4")
-			if err := runFFmpeg(ctx, path, nil, "apply the custom MP4 options", append(append([]string{"-xerror", "-i", recovered}, args...), custom)...); err != nil {
+			if err := runFFmpegProgress(ctx, path, nil, "apply the custom MP4 options", report, append(append([]string{"-xerror", "-i", recovered}, args...), custom)...); err != nil {
 				return ProcessedCopy{}, err
 			}
 			recovered = custom
 		}
 		staged = recovered
-		err = verifyCopy(ctx, path, staged)
+		err = verifyCopyProgress(ctx, path, staged, report)
 	}
 	if err != nil {
 		return ProcessedCopy{}, err
 	}
+	reportPhase(report, "Saving MP4")
 	if err := syncProcessedCopy(staged, false); err != nil {
 		return ProcessedCopy{}, fault.Action("the processed copy could not be safely synchronized to disk; raw FLV kept", err)
 	}
@@ -198,7 +204,24 @@ func Process(parent context.Context, source string, cfg state.Config) (Processed
 	return ProcessedCopy{Path: target, Reencoded: reencoded}, nil
 }
 
-func copyFLV(ctx context.Context, path, source, staged string, args []string) error {
+func nextProcessedPath(source string) (string, error) {
+	base := strings.TrimSuffix(source, filepath.Ext(source))
+	for n := 1; n <= 9999; n++ {
+		suffix := ".processed.mp4"
+		if n > 1 {
+			suffix = fmt.Sprintf(".processed-%d.mp4", n)
+		}
+		path := base + suffix
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return path, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", errors.New("too many processed copies already exist")
+}
+
+func copyFLV(ctx context.Context, path, source, staged string, args []string, report func(Progress)) error {
 	input, err := processingInput(ctx, source)
 	if err != nil {
 		return fault.Action("could not read the raw FLV for processing; raw FLV kept", err)
@@ -208,11 +231,24 @@ func copyFLV(ctx context.Context, path, source, staged string, args []string) er
 	argv = append(argv, args...)
 	argv = append(argv, staged)
 	stdin := &processingReader{Reader: input}
-	return runFFmpeg(ctx, path, stdin, "create the processed copy", argv...)
+	return runFFmpegProgress(ctx, path, stdin, "create the processed copy", report, argv...)
 }
 
 func runFFmpeg(ctx context.Context, path string, input *processingReader, operation string, args ...string) error {
-	cmd := exec.CommandContext(ctx, path, append(slices.Clone(ffmpegBase), args...)...)
+	return runFFmpegProgress(ctx, path, input, operation, nil, args...)
+}
+
+func runFFmpegProgress(ctx context.Context, path string, input *processingReader, operation string, report func(Progress), args ...string) error {
+	base := slices.Clone(ffmpegBase)
+	phase := processingPhase(operation)
+	reportPhase(report, phase)
+	if report != nil {
+		base = append(base, "-progress", "pipe:1", "-nostats")
+	}
+	cmd := exec.CommandContext(ctx, path, append(base, args...)...)
+	if report != nil {
+		cmd.Stdout = &progressWriter{report: report, value: Progress{Phase: phase}}
+	}
 	configureCommand(cmd)
 	if input != nil {
 		cmd.Stdin = input
@@ -239,10 +275,14 @@ func runFFmpeg(ctx context.Context, path string, input *processingReader, operat
 }
 
 func verifyCopy(ctx context.Context, path, staged string) error {
+	return verifyCopyProgress(ctx, path, staged, nil)
+}
+
+func verifyCopyProgress(ctx context.Context, path, staged string, report func(Progress)) error {
 	if info, err := os.Stat(staged); err != nil || info.Size() == 0 {
 		return fault.Action("FFmpeg produced no processed copy; raw FLV kept", err)
 	}
-	return runFFmpeg(ctx, path, nil, "verify the processed copy", "-xerror", "-err_detect", "explode", "-abort_on", "empty_output+empty_output_stream", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
+	return runFFmpegProgress(ctx, path, nil, "verify the processed copy", report, "-xerror", "-err_detect", "explode", "-abort_on", "empty_output+empty_output_stream", "-i", staged, "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-f", "null", "-")
 }
 
 type processingReader struct {

@@ -45,7 +45,7 @@ func TestProcessingMessagesDistinguishFailureStageAndCause(t *testing.T) {
 		}
 	}
 	err := processingFailure(context.DeadlineExceeded, errors.New("process killed"), "partial output", "verify the processed copy")
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "30-minute") || !strings.Contains(err.Error(), "raw FLV kept") {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "raw FLV kept") {
 		t.Fatal("processing deadline was not explained", err)
 	}
 	err = processingFailure(nil, errors.New("synthetic exit failure"), "", "create the processed copy")

@@ -259,7 +259,7 @@ func TestProcessingNeverBlocksNextRecordingOrShutdown(t *testing.T) {
 	waitFor(t, func() bool { return e.Snapshot().Recording == 1 })
 	processing := make(chan struct{}, 1)
 	e.mu.Lock()
-	e.process = func(ctx context.Context, path string, cfg state.Config) (recording.ProcessedCopy, error) {
+	e.process = func(ctx context.Context, path string, cfg state.Config, _ func(recording.Progress)) (recording.ProcessedCopy, error) {
 		processing <- struct{}{}
 		<-ctx.Done()
 		return recording.ProcessedCopy{}, ctx.Err()

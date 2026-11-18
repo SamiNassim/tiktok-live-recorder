@@ -17,7 +17,7 @@ import (
 // the MP4. I/O failures, bad arguments and cancellation keep their original error.
 func canRecoverMP4(err error) bool {
 	detail := strings.ToLower(fault.Details(err))
-	for _, reason := range []string{"could not find tag for codec", "not currently supported in container", "non monotonically increasing dts", "non-monotonous dts"} {
+	for _, reason := range []string{"could not find tag for codec", "not currently supported in container", "non monotonically increasing dts", "non-monotonous dts", "non-monotonic dts"} {
 		if strings.Contains(detail, reason) {
 			return true
 		}
@@ -33,6 +33,11 @@ type flvSection struct {
 // recoverMP4 decodes each section with its own codec parameters, then joins
 // the decoded streams before encoding one continuous track of each type.
 func recoverMP4(ctx context.Context, path, source, output string) error {
+	return recoverMP4Progress(ctx, path, source, output, nil)
+}
+
+func recoverMP4Progress(ctx context.Context, path, source, output string, report func(Progress)) error {
+	reportPhase(report, "Preparing recovery")
 	dir := filepath.Dir(output)
 	sections, err := splitFLV(ctx, source, dir)
 	if err != nil {
@@ -65,7 +70,12 @@ func recoverMP4(ctx context.Context, path, source, output string) error {
 		// recompute their geometry when the incoming picture size changes.
 		argv = append(argv, "-reinit_filter:v", "0", "-err_detect", "explode", "-i", section.name)
 		if hasVideo {
-			fmt.Fprintf(&graph, "[%d:v:0]scale=w='max(2,trunc(min(%d,%d*dar)/2)*2)':h='max(2,trunc(min(%d,%d/dar)/2)*2)':eval=frame,setsar=1,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:eval=frame,format=yuv420p[v%d];", i, width, height, height, width, width, height, i)
+			// Ordered FLV decode timestamps do not guarantee ordered decoded
+			// picture times: B-frame composition offsets can jitter backwards.
+			// Keep every picture and the source clock wherever possible, moving
+			// only colliding times forward by one encoder tick. Repair before
+			// concat so its section durations also use the corrected clock.
+			fmt.Fprintf(&graph, "[%d:v:0]settb=1/1000,setpts='if(isnan(PREV_OUTPTS),PTS,max(PTS,PREV_OUTPTS+1))',scale=w='max(2,trunc(min(%d,%d*dar)/2)*2)':h='max(2,trunc(min(%d,%d/dar)/2)*2)':eval=frame,setsar=1,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:eval=frame,format=yuv420p[v%d];", i, width, height, height, width, width, height, i)
 			fmt.Fprintf(&labels, "[v%d]", i)
 		}
 		if hasAudio {
@@ -108,7 +118,7 @@ func recoverMP4(ctx context.Context, path, source, output string) error {
 	if hasAudio {
 		argv = append(argv, "-c:a", "aac", "-b:a", "192k")
 	}
-	return runFFmpeg(ctx, path, nil, "encode a continuous MP4", append(argv, "-movflags", "+faststart", output)...)
+	return runFFmpegProgress(ctx, path, nil, "encode a continuous MP4", report, append(argv, "-movflags", "+faststart", output)...)
 }
 
 func h264Options(ctx context.Context, path string) ([]string, error) {

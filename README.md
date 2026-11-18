@@ -130,8 +130,12 @@ default. After the recording ends, the app creates a separate
 before making it available for playback.
 
 Compatible streams are copied without re-encoding. If the recording switches
-between HEVC and H.264, the app automatically makes a continuous H.264 MP4
-with AAC audio when audio is present. Re-encoding takes longer and can change
+between HEVC and H.264, has invalid picture timestamps, or ends in a partial
+packet, the app automatically makes a continuous H.264 MP4 with AAC audio when
+audio is present. Recovery keeps
+every decoded picture and repairs backward or duplicate picture times in the
+processed copy. Incomplete final packets are omitted only from recovery inputs;
+the original FLV is kept. Re-encoding takes longer and can change
 picture quality. FFmpeg needs an H.264 encoder such as libx264 for this step.
 HEVC stream copies still require a player that supports HEVC. Existing MKV and
 TS copies remain accessible from recording history.
@@ -148,6 +152,20 @@ recording**, **Show in folder**, and **Copy file path**. The right-click menu al
 provides separate actions for the original FLV while it is retained. A recording
 stays in history after automatic FLV cleanup. Until a copy is ready, or if
 processing is disabled or fails, the raw file remains available.
+
+To process a saved FLV, right-click its completed history row and choose
+**Convert to MP4** or **Retry MP4 conversion**. The status shows the current
+stage and one estimated overall percentage across conversion and verification.
+Recovery can add work and revise the overall estimate; it
+measures media work, not time remaining. Hover over the status for processed media
+time, conversion speed, and elapsed time. **Cancel conversion** stops one job independently
+of monitoring and recording. Conversion has no fixed time limit; quitting the
+app cancels it and keeps the raw FLV.
+
+If a playback copy already exists and the original FLV is retained, choose
+**Convert again** to process it with the current settings. It creates a separate
+numbered MP4, keeps the previous copy, and updates history only after the new
+copy passes verification. Existing processed copies are never overwritten.
 
 Leave **Custom FFmpeg output options** blank for automatic processing.
 The field accepts output options only. The app supplies the input and output

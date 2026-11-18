@@ -112,8 +112,10 @@ func (a *application) refresh() { a.refreshVisible() }
 // Refresh every snapshot, but repaint only when the current page or sidebar
 // shows the change. Hidden pages read the latest data when they are opened.
 func (a *application) refreshVisible() bool {
+	previousRows := a.snapshot.Rows
 	polling := a.snapshot.Polling
 	queueTargets := a.snapshot.QueueTargets
+	processingRevision := a.snapshot.ProcessingRevision
 	records := a.data.Recordings
 	dataRevision, logRevision := a.dataRevision, a.logRevision
 	snapshotChanged := false
@@ -142,11 +144,11 @@ func (a *application) refreshVisible() bool {
 	case "logs":
 		return sidebarChanged || logRevision != a.logRevision
 	case "recordings":
-		return sidebarChanged || dataRevision != a.dataRevision && !slices.Equal(records, a.data.Recordings)
+		return sidebarChanged || processingRevision != a.snapshot.ProcessingRevision || dataRevision != a.dataRevision && !slices.Equal(records, a.data.Recordings)
 	case "settings":
 		return sidebarChanged || queueTargets != a.snapshot.QueueTargets
 	default:
-		return sidebarChanged || snapshotChanged
+		return sidebarChanged || queueTargets != a.snapshot.QueueTargets || !slices.Equal(previousRows, a.snapshot.Rows)
 	}
 }
 
