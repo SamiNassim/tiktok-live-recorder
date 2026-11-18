@@ -33,6 +33,7 @@ func (a *application) streamers(c *ui.Context) {
 		rows := a.streamerRows()
 		a.streamList.Key = func(i int) any { return rows[i].Streamer.ID }
 		a.streamList.KeepOffset = true
+		a.streamList.Selected = &a.streamSelected
 		a.streamList.CellMenu = func(m *ui.Menu, row, _ int) { a.streamMenu(m, rows[row]) }
 		if len(rows) == 0 {
 			ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
@@ -47,7 +48,7 @@ func (a *application) streamers(c *ui.Context) {
 		} else {
 			columns := []ui.TableColumn{{Title: "Streamer", MinWidth: 160}, {Title: "Status", Width: 160}, {Title: "Duration", Width: 80}, {Title: "Last recorded", Width: 140}, {Title: "Next check", Width: 100}, {Title: "Priority", Width: 80}, {Title: "", ID: "actions", Width: 52, Fixed: true}}
 			first, last := a.streamList.Visible()
-			ui.Table(c, &a.streamList, columns, len(rows), func(row, col int) {
+			if ui.Table(c, &a.streamList, columns, len(rows), func(row, col int) {
 				r := rows[row]
 				switch col {
 				case 0:
@@ -87,6 +88,13 @@ func (a *application) streamers(c *ui.Context) {
 						}
 						label := r.Status
 						ui.Text(c, "●  "+label).FontSize(12).TextColor(color).SingleLine().Tooltip(detail)
+						if r.Error != "" {
+							if ui.ButtonBase(c).Label("View related logs for @" + r.Streamer.ID).Children(func() {
+								ui.Text(c, "View logs").FontSize(10).TextColor(t.Accent)
+							}).Clicked() {
+								a.viewStreamerLogs(r.Streamer.ID)
+							}
+						}
 						if r.Streamer.RecordingPaused && !r.Streamer.Paused {
 							ui.Text(c, "Recording paused").FontSize(10).TextColor(t.Warning)
 						}
@@ -124,7 +132,9 @@ func (a *application) streamers(c *ui.Context) {
 						ui.Icon(c, dotsIcon).Size(18, 18)
 					}).Menu(func(m *ui.Menu) { a.streamMenu(m, r) })
 				}
-			}).Grow(1).MinHeight(0).FillWidth()
+			}).Grow(1).MinHeight(0).FillWidth().Submitted() && a.streamSelected >= 0 && a.streamSelected < len(rows) {
+				a.viewStreamerLogs(rows[a.streamSelected].Streamer.ID)
+			}
 		}
 		ui.Divider(c)
 		ui.Row(c).Padding(14, 18).FillWidth().Children(func() {
@@ -136,6 +146,15 @@ func (a *application) streamers(c *ui.Context) {
 
 func (a *application) streamMenu(m *ui.Menu, r monitor.Row) {
 	s := r.Streamer
+	if m.Item("View related logs").Chosen() {
+		a.viewStreamerLogs(s.ID)
+	}
+	if r.Error != "" {
+		if m.Item("Retry check").Disabled(a.busy || !a.canRetryCheck(r)).Chosen() {
+			a.retryCheck(s.ID)
+		}
+	}
+	m.Separator()
 	if m.Item("Open TikTok page").Chosen() {
 		_ = mygo.Shell.OpenExternal("https://www.tiktok.com/@" + s.ID + "/live")
 	}
@@ -199,6 +218,17 @@ func (a *application) logsPage(c *ui.Context) {
 		}
 	})
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(8).Children(func() {
+		if a.logStreamer != "" {
+			ui.Row(c).Padding(12, 16).Gap(12).AlignItems(ui.Center).FillWidth().Children(func() {
+				ui.Text(c, "Logs for @"+a.logStreamer).FontSize(12).FontWeight(600).Grow(1)
+				if ui.Button(c, "Show all streamers").Clicked() {
+					a.logStreamer = ""
+					a.logList.ScrollTo(0, ui.Start)
+				}
+			})
+			a.streamerLogIssue(c)
+			ui.Divider(c)
+		}
 		ui.Row(c).Padding(16).Gap(12).FillWidth().Children(func() {
 			ui.SearchField(c, &a.logQuery).Placeholder("Search logs…").Label("Search logs").Grow(1).Height(34)
 			ui.Select(c, &a.level, []string{"All levels", "ERROR", "WARN", "INFO", "DEBUG"}).Label("Log level").Width(144).Height(34)
@@ -213,26 +243,33 @@ func (a *application) logsPage(c *ui.Context) {
 		a.logList.KeepOffset = true
 		services := c.Services()
 		a.logList.CellMenu = func(m *ui.Menu, row, _ int) { logMenu(m, entries[row], services) }
-		ui.Table(c, &a.logList, []ui.TableColumn{{Title: "Time", Width: 150}, {Title: "Level", Width: 70}, {Title: "Streamer", Width: 140}, {Title: "Message", MinWidth: 200}}, len(entries), func(row, col int) {
-			e := entries[row]
-			switch col {
-			case 0:
-				ui.Text(c, timestamp(e.Time)).FontSize(11).TextColor(t.TextMuted)
-			case 1:
-				color := t.Accent
-				if e.Level == "WARN" {
-					color = t.Warning
+		if len(entries) == 0 {
+			ui.Column(c).Grow(1).FillWidth().Center().Gap(10).Children(func() {
+				ui.Text(c, "No matching log entries").FontSize(16).FontWeight(600)
+				ui.Text(c, "Try another search or log level. Older entries may have been cleared or rotated.").FontSize(12).TextColor(t.TextMuted).MaxWidth(460)
+			})
+		} else {
+			ui.Table(c, &a.logList, []ui.TableColumn{{Title: "Time", Width: 150}, {Title: "Level", Width: 70}, {Title: "Streamer", Width: 140}, {Title: "Message", MinWidth: 200}}, len(entries), func(row, col int) {
+				e := entries[row]
+				switch col {
+				case 0:
+					ui.Text(c, timestamp(e.Time)).FontSize(11).TextColor(t.TextMuted)
+				case 1:
+					color := t.Accent
+					if e.Level == "WARN" {
+						color = t.Warning
+					}
+					if e.Level == "ERROR" {
+						color = t.Danger
+					}
+					ui.Text(c, e.Level).FontSize(11).TextColor(color)
+				case 2:
+					ui.Text(c, e.Streamer).FontSize(11).TextColor(t.TextMuted).SingleLine()
+				case 3:
+					ui.Text(c, e.Message).FontSize(12).MaxLines(4).Padding(12, 0).Selectable().Tooltip(e.Message).ContextMenu(func(m *ui.Menu) { logMenu(m, e, services) })
 				}
-				if e.Level == "ERROR" {
-					color = t.Danger
-				}
-				ui.Text(c, e.Level).FontSize(11).TextColor(color)
-			case 2:
-				ui.Text(c, e.Streamer).FontSize(11).TextColor(t.TextMuted).SingleLine()
-			case 3:
-				ui.Text(c, e.Message).FontSize(12).MaxLines(4).Padding(12, 0).Selectable().Tooltip(e.Message).ContextMenu(func(m *ui.Menu) { logMenu(m, e, services) })
-			}
-		}).Grow(1).MinHeight(0).FillWidth()
+			}).Grow(1).MinHeight(0).FillWidth()
+		}
 		ui.Divider(c)
 		ui.Text(c, fmt.Sprintf("%d matching · %d retained · newest first · right-click for details · disk logs rotate at 15 MB total", len(entries), len(a.logs))).Padding(14, 18).FontSize(11).TextColor(t.TextMuted)
 	})

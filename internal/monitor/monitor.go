@@ -54,13 +54,23 @@ const (
 )
 
 type item struct {
-	row           Row
-	handle        activeRecording
-	recordCancel  context.CancelFunc
-	failures      int
-	config        state.Config
-	recoveryUntil time.Time
+	row            Row
+	handle         activeRecording
+	recordCancel   context.CancelFunc
+	failures       int
+	config         state.Config
+	recoveryUntil  time.Time
+	retryAfter     time.Time
+	recordingIssue string
 }
+
+func (it *item) queueCheck() {
+	it.row.NextCheck = time.Now()
+	if it.row.NextCheck.Before(it.retryAfter) {
+		it.row.NextCheck = it.retryAfter
+	}
+}
+
 type Engine struct {
 	store              *state.Store
 	log                *logging.Log
@@ -127,7 +137,7 @@ func (e *Engine) SaveConfig(c state.Config) error {
 	e.configure(c)
 	e.mu.Lock()
 	for _, it := range e.items {
-		it.row.NextCheck = time.Now()
+		it.queueCheck()
 		it.failures = 0
 		if !c.PollingEnabled {
 			it.recoveryUntil = time.Time{}
@@ -177,15 +187,18 @@ func (e *Engine) Edit(id string, change func(*state.Streamer)) error {
 		if it := e.items[id]; it != nil {
 			it.row.Streamer = after
 			if before.Paused != after.Paused || before.RecordingPaused != after.RecordingPaused || before.LowPriority != after.LowPriority {
-				it.row.NextCheck = time.Now()
-				it.row.Error = ""
+				it.queueCheck()
 				it.failures = 0
 				if after.Paused || after.RecordingPaused {
 					it.recoveryUntil = time.Time{}
 					stop(it)
 				}
 				if it.handle == nil {
-					it.row.Status = "Waiting"
+					if it.row.Error == "" {
+						it.row.Status = "Waiting"
+					} else if it.row.Status == "Monitoring paused" {
+						it.row.Status = "Needs attention"
+					}
 					if after.Paused {
 						it.row.Status = "Monitoring paused"
 						it.row.NextCheck = time.Time{}
@@ -198,6 +211,31 @@ func (e *Engine) Edit(id string, change func(*state.Streamer)) error {
 	}
 	return err
 }
+
+// RetryCheck schedules discovery through the same paced queue as automatic
+// checks. Keep the previous error until the failed operation succeeds.
+func (e *Engine) RetryCheck(id string) error {
+	if !e.store.Config().PollingEnabled {
+		return errors.New("enable monitoring in Settings before retrying")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	it := e.items[id]
+	if it == nil {
+		return errors.New("streamer no longer exists")
+	}
+	if it.row.Streamer.Paused {
+		return errors.New("resume monitoring for this streamer before retrying")
+	}
+	if it.handle != nil || it.recordCancel != nil || it.row.Status == "Checking" {
+		return errors.New("this streamer is already being checked or recorded")
+	}
+	it.queueCheck()
+	e.log.Write("INFO", id, "Stream check queued by user. "+nextCheckMessage(e.store.Config(), it))
+	e.wakeUp()
+	return nil
+}
+
 func (e *Engine) SetRecordingPaused(id string, paused bool) error {
 	err := e.Edit(id, func(s *state.Streamer) { s.RecordingPaused = paused })
 	if err == nil {
@@ -482,14 +520,18 @@ func (e *Engine) check(id string) {
 		}
 		if errors.Is(err, tiktok.ErrRateLimited) {
 			it.row.NextCheck = time.Now().Add(max(5*time.Minute, interval(cfg, it.row.Streamer.LowPriority)))
+			it.retryAfter = it.row.NextCheck
 		}
 		if previousError != it.row.Error {
 			e.log.WriteError("WARN", id, "Could not complete the TikTok stream check: "+it.row.Error+". "+nextCheckMessage(cfg, it), err)
 		}
 		return
 	}
-	it.row.Error = ""
+	// Discovery cannot prove that a disk or folder problem has been fixed.
+	// Keep those failures until a recording can actually start successfully.
+	it.row.Error = it.recordingIssue
 	it.failures = 0
+	it.retryAfter = time.Time{}
 	if !source.Live {
 		if now.Before(it.recoveryUntil) && !it.row.Streamer.RecordingPaused {
 			it.row.Status = "Reconnecting"
@@ -501,6 +543,9 @@ func (e *Engine) check(id string) {
 		}
 		it.recoveryUntil = time.Time{}
 		it.row.Status = "Offline"
+		if it.recordingIssue != "" {
+			it.row.Status = "Needs attention"
+		}
 		if previousStatus == "Reconnecting" {
 			e.log.Write("INFO", id, "The stream did not resume during the recovery window; returning to the configured polling interval. "+nextCheckMessage(cfg, it))
 		}
@@ -509,6 +554,9 @@ func (e *Engine) check(id string) {
 	it.recoveryUntil = time.Time{}
 	if it.row.Streamer.RecordingPaused {
 		it.row.Status = "Live"
+		if it.recordingIssue != "" {
+			it.row.Status = "Needs attention"
+		}
 		return
 	}
 	it.row.Status = "Starting"
@@ -525,6 +573,9 @@ func (e *Engine) check(id string) {
 		it.row.Status = "Needs attention"
 		if canceled {
 			it.row.Status = "Waiting"
+			if it.row.Error != "" {
+				it.row.Status = "Needs attention"
+			}
 			it.row.NextCheck = time.Now()
 			return
 		}
@@ -533,6 +584,7 @@ func (e *Engine) check(id string) {
 		level := "WARN"
 		if fault.RequiresAction(startErr) {
 			level = "ERROR"
+			it.recordingIssue = it.row.Error
 		}
 		e.log.WriteError(level, id, it.row.Error+". "+nextCheckMessage(cfg, it), startErr)
 		return
@@ -540,6 +592,7 @@ func (e *Engine) check(id string) {
 	it.handle = h
 	it.config = cfg
 	it.row.Status = "Recording"
+	it.row.Error, it.recordingIssue = "", ""
 	it.row.StartedAt = h.Started()
 	it.row.Path = h.File()
 	it.row.NextCheck = time.Time{}
@@ -592,8 +645,13 @@ func (e *Engine) completed(it *item) {
 	it.row.StartedAt = time.Time{}
 	it.row.Path = ""
 	it.row.Status = "Waiting"
+	if fault.RequiresAction(r.Err) {
+		it.row.Error = "Recording stopped: " + fault.Reason(r.Err)
+		it.recordingIssue = it.row.Error
+		it.row.Status = "Needs attention"
+	}
 	it.recoveryUntil = time.Time{}
-	if !immediate && (r.Err == nil || r.TransportEnded) && r.Bytes > 0 && e.ctx.Err() == nil && e.store.Config().PollingEnabled {
+	if !immediate && !fault.RequiresAction(r.Err) && (r.Err == nil || r.TransportEnded) && r.Bytes > 0 && e.ctx.Err() == nil && e.store.Config().PollingEnabled {
 		it.recoveryUntil = time.Now().Add(recoveryWindow)
 	}
 	it.row.NextCheck = time.Now().Add(recoveryInterval)

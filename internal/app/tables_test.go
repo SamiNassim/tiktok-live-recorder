@@ -108,7 +108,7 @@ func BenchmarkTableViews(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			filteredRows(a.snapshot.Rows, a.query, a.status, a.priority, a.order)
-			filteredLogs(a.logs, a.logQuery, a.level)
+			filteredLogs(a.logs, a.logQuery, a.level, a.logStreamer)
 			rows := slices.Clone(a.data.Recordings)
 			slices.SortFunc(rows, func(a, b state.Recording) int { return b.StartedAt.Compare(a.StartedAt) })
 		}

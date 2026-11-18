@@ -55,8 +55,9 @@ type application struct {
 
 	page                            string
 	query, status, priority, order  string
-	logQuery, level                 string
+	logQuery, level, logStreamer    string
 	streamList, logList, recordList ui.ListState
+	streamSelected                  int
 	settingsScroll                  ui.ScrollState
 	clearHistoryOpen                bool
 	accountSettingsRequested        bool
@@ -83,7 +84,7 @@ type application struct {
 
 func newApplication(store *state.Store, log *logging.Log) *application {
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &application{store: store, log: log, ctx: ctx, cancel: cancel, cfg: store.Config(), page: "streamers", status: "All statuses", priority: "All priorities", order: "Last recorded", level: "All levels"}
+	a := &application{store: store, log: log, ctx: ctx, cancel: cancel, cfg: store.Config(), page: "streamers", status: "All statuses", priority: "All priorities", order: "Last recorded", level: "All levels", streamSelected: -1}
 	a.data, a.dataRevision = store.DataSince(0)
 	a.logo, _ = decodeThumbnail(assets.Icon, logoPixels)
 	a.avatars = make(map[string]*ui.Bitmap)
@@ -142,7 +143,8 @@ func (a *application) refreshVisible() bool {
 	sidebarChanged := polling != a.snapshot.Polling
 	switch a.page {
 	case "logs":
-		return sidebarChanged || logRevision != a.logRevision
+		return sidebarChanged || logRevision != a.logRevision || a.logStreamer != "" &&
+			streamerLogRow(previousRows, a.logStreamer) != streamerLogRow(a.snapshot.Rows, a.logStreamer)
 	case "recordings":
 		return sidebarChanged || processingRevision != a.snapshot.ProcessingRevision || dataRevision != a.dataRevision && !slices.Equal(records, a.data.Recordings)
 	case "settings":

@@ -22,7 +22,7 @@ func TestDefaultSortAndLogOrder(t *testing.T) {
 	}
 	entries := []logging.Entry{{Sequence: 2, Time: now, Level: "WARN"}, {Sequence: 1, Time: now.Add(-time.Minute), Level: "WARN"}, {Sequence: 3, Time: now, Level: "INFO"}}
 	for _, level := range []string{"All levels", "WARN"} {
-		got := filteredLogs(entries, "", level)
+		got := filteredLogs(entries, "", level, "")
 		if got[0].Sequence != map[string]uint64{"All levels": 3, "WARN": 2}[level] {
 			t.Fatal(got)
 		}

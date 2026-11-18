@@ -209,6 +209,11 @@ Use the row's **…** menu:
   **Resume monitoring** restores checks; the separate recording-pause preference
   is preserved.
 - Rename the streamer or change its priority.
+- **View related logs:** open Logs filtered to that streamer. You can also
+  double-click a row or click **View logs** below an attention status. Use
+  **Show all streamers** in Logs to remove this filter.
+- **Retry check:** queue another check after addressing a warning. This uses
+  the normal request queue and respects monitoring pauses and rate-limit backoff.
 
 You can also right-click anywhere on a streamer row. The list defaults to
 **Last recorded**; search, filters, and sorting stay in place when switching tabs.
@@ -220,6 +225,11 @@ An access error is not treated as proof that a streamer is offline. The app show
 an attention/access status and records the reason in Logs. These are unofficial
 TikTok endpoints: access rules, response formats, regions, and CDN availability
 can change. An account is not a guarantee that every stream will be recordable.
+The streamer's filtered Logs view also shows the current issue, even if its
+original log entry was cleared or rotated. Viewing logs, retrying, or changing
+priority does not dismiss an unresolved warning. Discovery warnings clear after
+a successful check; disk and folder failures remain until a recording can start
+successfully.
 
 ## Settings and local data
 

@@ -62,10 +62,13 @@ func matchesStatus(r monitor.Row, status string) bool {
 }
 
 // Filter before virtualization, never after an arbitrary unfiltered tail limit.
-func filteredLogs(entries []logging.Entry, query, level string) []logging.Entry {
+func filteredLogs(entries []logging.Entry, query, level, streamer string) []logging.Entry {
 	out := make([]logging.Entry, 0, len(entries))
 	query = strings.ToLower(strings.TrimSpace(query))
 	for _, e := range entries {
+		if streamer != "" && e.Streamer != streamer {
+			continue
+		}
 		if level != "All levels" && e.Level != level {
 			continue
 		}

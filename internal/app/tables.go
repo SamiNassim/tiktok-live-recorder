@@ -45,8 +45,8 @@ func (a *application) streamerRows() []monitor.Row {
 }
 
 func (a *application) logRows() []logging.Entry {
-	return a.logRowsCache.get(a.logs, [4]string{a.logQuery, a.level}, func(entries []logging.Entry) []logging.Entry {
-		return filteredLogs(entries, a.logQuery, a.level)
+	return a.logRowsCache.get(a.logs, [4]string{a.logQuery, a.level, a.logStreamer}, func(entries []logging.Entry) []logging.Entry {
+		return filteredLogs(entries, a.logQuery, a.level, a.logStreamer)
 	})
 }
 
