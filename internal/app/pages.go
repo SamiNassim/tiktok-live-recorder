@@ -47,9 +47,16 @@ func (a *application) streamers(c *ui.Context) {
 			})
 		} else {
 			columns := []ui.TableColumn{{Title: "Streamer", MinWidth: 160}, {Title: "Status", Width: 160}, {Title: "Duration", Width: 80}, {Title: "Last recorded", Width: 140}, {Title: "Next check", Width: 100}, {Title: "Priority", Width: 80}, {Title: "", ID: "actions", Width: 52, Fixed: true}}
+			// Native selection uses the monochrome accent as its background.
+			// Explicit cell colors must follow that change as inherited text does.
+			selectedTheme := palette(!t.Dark)
 			first, last := a.streamList.Visible()
 			if ui.Table(c, &a.streamList, columns, len(rows), func(row, col int) {
 				r := rows[row]
+				rowTheme := t
+				if row == a.streamSelected {
+					rowTheme = selectedTheme
+				}
 				switch col {
 				case 0:
 					ui.Row(c).Height(58).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -57,26 +64,26 @@ func (a *application) streamers(c *ui.Context) {
 						if avatar := a.avatar(c, r.Streamer.Avatar); avatar != nil {
 							ui.Image(c, avatar).Size(34, 34).Radius(17)
 						} else {
-							ui.Box(c).Size(34, 34).Radius(17).Background(t.Accent.Alpha(0.15)).Center().Children(func() { ui.Text(c, strings.ToUpper(string(initial))).FontWeight(600).TextColor(t.Accent) })
+							ui.Box(c).Size(34, 34).Radius(17).Background(rowTheme.Accent.Alpha(0.15)).Center().Children(func() { ui.Text(c, strings.ToUpper(string(initial))).FontWeight(600).TextColor(rowTheme.Accent) })
 						}
 						ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 							ui.Text(c, r.Streamer.DisplayName()).FontWeight(600).SingleLine()
-							ui.Text(c, "@"+r.Streamer.ID).FontSize(11).TextColor(t.TextMuted).SingleLine()
+							ui.Text(c, "@"+r.Streamer.ID).FontSize(11).TextColor(rowTheme.TextMuted).SingleLine()
 						})
 					})
 				case 1:
-					color := t.TextMuted
+					color := rowTheme.TextMuted
 					switch r.Status {
 					case "Recording":
-						color = t.Danger
+						color = rowTheme.Danger
 					case "Live":
-						color = t.Success
+						color = rowTheme.Success
 					case "Monitoring paused":
-						color = t.Warning
+						color = rowTheme.Warning
 					case "Checking", "Starting", "Reconnecting":
-						color = t.Accent
+						color = rowTheme.Accent
 					case "Needs attention", "Live · access needed":
-						color = t.Warning
+						color = rowTheme.Warning
 					}
 					ui.Column(c).Gap(4).Children(func() {
 						detail := r.Error
@@ -90,13 +97,13 @@ func (a *application) streamers(c *ui.Context) {
 						ui.Text(c, "●  "+label).FontSize(12).TextColor(color).SingleLine().Tooltip(detail)
 						if r.Error != "" {
 							if ui.ButtonBase(c).Label("View related logs for @" + r.Streamer.ID).Children(func() {
-								ui.Text(c, "View logs").FontSize(10).TextColor(t.Accent)
+								ui.Text(c, "View logs").FontSize(10).TextColor(rowTheme.Accent)
 							}).Clicked() {
 								a.viewStreamerLogs(r.Streamer.ID)
 							}
 						}
 						if r.Streamer.RecordingPaused && !r.Streamer.Paused {
-							ui.Text(c, "Recording paused").FontSize(10).TextColor(t.Warning)
+							ui.Text(c, "Recording paused").FontSize(10).TextColor(rowTheme.Warning)
 						}
 					})
 				case 2:
@@ -110,7 +117,7 @@ func (a *application) streamers(c *ui.Context) {
 					}
 					ui.Text(c, label).FontSize(12)
 				case 3:
-					ui.Text(c, timestamp(r.Streamer.LastRecordedAt)).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, timestamp(r.Streamer.LastRecordedAt)).FontSize(11).TextColor(rowTheme.TextMuted)
 				case 4:
 					label := "—"
 					if a.snapshot.Polling && !r.NextCheck.IsZero() && r.Status != "Recording" && !r.Streamer.Paused {
@@ -120,16 +127,16 @@ func (a *application) streamers(c *ui.Context) {
 						}
 						label = "In " + duration(remaining)
 					}
-					ui.Text(c, label).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, label).FontSize(11).TextColor(rowTheme.TextMuted)
 				case 5:
 					label := "Normal"
 					if r.Streamer.LowPriority {
 						label = "Low"
 					}
-					ui.Text(c, label).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, label).FontSize(11).TextColor(rowTheme.TextMuted)
 				case 6:
-					ui.ButtonBase(c).Label("Actions for "+r.Streamer.DisplayName()).Size(32, 30).Radius(5).Border(1, t.Border).Background(t.Surface).Children(func() {
-						ui.Icon(c, dotsIcon).Size(18, 18)
+					ui.ButtonBase(c).Label("Actions for "+r.Streamer.DisplayName()).Size(32, 30).Radius(5).Border(1, rowTheme.Border).Background(rowTheme.Surface).Children(func() {
+						ui.Icon(c, dotsIcon).Size(18, 18).TextColor(rowTheme.Text)
 					}).Menu(func(m *ui.Menu) { a.streamMenu(m, r) })
 				}
 			}).Grow(1).MinHeight(0).FillWidth().Submitted() && a.streamSelected >= 0 && a.streamSelected < len(rows) {
