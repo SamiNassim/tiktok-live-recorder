@@ -87,3 +87,20 @@ func TestConversionProgressCountsPartialFailedPass(t *testing.T) {
 		t.Fatal("partial failed work was not counted", pass, passes, percent, overall)
 	}
 }
+
+func TestConversionProgressAddsAutomaticRepairAfterFailedRecovery(t *testing.T) {
+	p := conversionProgress{sourceDuration: 100 * time.Second, custom: true}
+	p.update(recording.Progress{Phase: "Creating MP4", MediaTime: 100 * time.Second})
+	p.update(recording.Progress{Phase: "Verifying MP4", MediaTime: 50 * time.Second})
+	p.update(recording.Progress{Phase: "Preparing recovery"})
+	p.update(recording.Progress{Phase: "Encoding MP4", MediaTime: 25 * time.Second})
+	pass, passes, _, _ := p.update(recording.Progress{Phase: "Preparing repair"})
+	if pass != 3 || passes != 5 {
+		t.Fatal("automatic repair did not replace unused custom/recovery passes", pass, passes)
+	}
+	p.update(recording.Progress{Phase: "Repairing MP4", MediaTime: 100 * time.Second})
+	pass, passes, percent, overall := p.update(recording.Progress{Phase: "Verifying MP4", MediaTime: 50 * time.Second})
+	if pass != 5 || passes != 5 || percent != 50 || overall != 86 {
+		t.Fatal("automatic repair lost prior work or final verification", pass, passes, percent, overall)
+	}
+}

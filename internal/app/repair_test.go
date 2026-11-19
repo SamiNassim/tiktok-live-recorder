@@ -42,7 +42,7 @@ func TestRepairMenuRequiresConfirmationAndExplainsTradeoffs(t *testing.T) {
 					t.Fatal("repair did not wait for confirmation or targeted the wrong recording")
 				}
 				for _, want := range []string{
-					"Try to repair this recording?", r.Path, "more tolerant conversion",
+					"Try to repair this recording?", r.Path, "more tolerant conversion", "tries repair automatically",
 					"visual glitches", "audio sync issues", "always kept", "may still fail",
 					"Custom output options are not used for repair.", "Create repaired MP4",
 				} {

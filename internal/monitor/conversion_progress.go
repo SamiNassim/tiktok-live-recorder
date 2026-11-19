@@ -41,9 +41,9 @@ func (p *conversionProgress) update(value recording.Progress) (pass, passes, per
 				p.duration = p.mediaTime
 			}
 		}
-		if value.Phase == "Preparing recovery" {
-			p.passes = p.pass + 2 // Recovery encoding and final verification.
-			if p.custom {
+		if value.Phase == "Preparing recovery" || value.Phase == "Preparing repair" {
+			p.passes = p.pass + 2 // Encoding and final verification.
+			if value.Phase == "Preparing recovery" && p.custom {
 				p.passes++
 			}
 			if p.sourceDuration > 0 {

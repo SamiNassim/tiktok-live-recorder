@@ -140,6 +140,13 @@ picture quality. FFmpeg needs an H.264 encoder such as libx264 for this step.
 HEVC stream copies still require a player that supports HEVC. Existing MKV and
 TS copies remain accessible from recording history.
 
+If normal conversion and its recovery cannot process damaged media, the app
+automatically tries a tolerant repair. This re-encodes with the app's repair
+settings, ignores custom output options, and always keeps the original FLV.
+The status changes to repair and Logs explain why it was needed. The repaired
+MP4 must still pass the same complete decoding check. Disk, permissions,
+settings, and cancellation failures do not trigger repair.
+
 **The original FLV is kept by default.** If you enable **Delete original FLV
 after processing**, the app verifies the copy, flushes it to disk, and saves
 its history entry before removing the FLV. It keeps the original if automatic
@@ -156,7 +163,8 @@ processing is disabled or fails, the raw file remains available.
 To process a saved FLV, right-click its completed history row and choose
 **Convert to MP4** or **Retry MP4 conversion**. The status shows the current
 stage and one estimated overall percentage across conversion and verification.
-Recovery can add work and revise the overall estimate; it
+These actions use the same automatic repair fallback as newly completed
+recordings. Recovery or repair can add work and revise the overall estimate; it
 measures media work, not time remaining. Hover over the status for processed media
 time, conversion speed, and elapsed time. **Cancel conversion** stops one job independently
 of monitoring and recording. Conversion has no fixed time limit; quitting the
@@ -167,10 +175,10 @@ If a playback copy already exists and the original FLV is retained, choose
 numbered MP4, keeps the previous copy, and updates history only after the new
 copy passes verification. Existing processed copies are never overwritten.
 
-If normal conversion fails, choose **Repair recording…** and review the
-explanation before clicking **Create repaired MP4**. This uses tolerant decoding
-and re-encodes the recording with the app's repair settings, ignoring custom
-output options. Damaged media may be skipped or reconstructed, so visual glitches,
+To skip normal conversion and start with repair, choose **Repair recording…**
+and review the explanation before clicking **Create repaired MP4**. This uses
+tolerant decoding and re-encodes the recording with the app's repair settings,
+ignoring custom output options. Damaged media may be skipped or reconstructed, so visual glitches,
 gaps, audio sync issues, or reduced quality can remain. A separate `.repaired.mp4`
 is checked from start to finish before it becomes the playback copy. The original
 FLV and all previous copies are always kept, including when automatic raw cleanup

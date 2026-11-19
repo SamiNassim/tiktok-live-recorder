@@ -181,7 +181,12 @@ func processWithProgress(ctx context.Context, source string, cfg state.Config, r
 			if ctx.Err() != nil {
 				return ProcessedCopy{}, processingFailure(ctx.Err(), recoverErr, "", "recover the processed copy")
 			}
-			return ProcessedCopy{}, fault.Action("Could not recover the recording as MP4. Raw FLV kept", errors.Join(recoverErr, err))
+			// The recovery failure decides eligibility. An earlier media error
+			// must not hide a later disk, encoder or settings failure.
+			return ProcessedCopy{}, fault.Action("Could not recover the recording as MP4. Raw FLV kept", &processingError{
+				error:      errors.Join(recoverErr, err),
+				repairable: CanRepair(recoverErr),
+			})
 		}
 		reencoded = true
 		if len(args) > 0 {
@@ -289,7 +294,7 @@ func runFFmpegProgressMode(ctx context.Context, path string, input *processingRe
 			err = nil
 		}
 		return details, fault.Action("Could not prepare the raw FLV for FFmpeg. Raw FLV kept",
-			errors.Join(input.err, ffmpegCause(err, details)))
+			errors.Join(mediaInputFailure(input.err), ffmpegCause(err, details)))
 	}
 	if err == nil && details != "" && !tolerateInputErrors {
 		err = errors.New("FFmpeg reported errors")

@@ -81,8 +81,8 @@ func TestRepairToleratesDamageAndVerifiesSeparateCopies(t *testing.T) {
 			}
 			cfg := state.Defaults()
 			cfg.FFmpegPath, cfg.DeleteRawAfterProcessing = path, true
-			if _, err := Process(ctx, source, cfg); err == nil {
-				t.Fatal("synthetic damage did not exercise a strict conversion failure")
+			if _, err := Process(ctx, source, cfg); err == nil || !CanRepair(err) {
+				t.Fatal("synthetic damage did not exercise a repairable strict conversion failure", fault.Details(err))
 			}
 			previousCopy := strings.TrimSuffix(source, ".flv") + ".processed.mp4"
 			previousRepair := strings.TrimSuffix(source, ".flv") + ".repaired.mp4"

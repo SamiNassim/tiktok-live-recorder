@@ -41,7 +41,7 @@ func recoverMP4Progress(ctx context.Context, path, source, output string, report
 	dir := filepath.Dir(output)
 	sections, err := splitFLV(ctx, source, dir)
 	if err != nil {
-		return fmt.Errorf("split FLV at media changes: %w", err)
+		return fmt.Errorf("split FLV at media changes: %w", mediaInputFailure(err))
 	}
 	// A single MP4 video track needs a common canvas. Read the initial
 	// dimensions from each section using FFmpeg's single-frame image output.
@@ -64,7 +64,7 @@ func recoverMP4Progress(ctx context.Context, path, source, output string, report
 	var graph, labels strings.Builder
 	for i, section := range sections {
 		if hasVideo && !section.video {
-			return errors.New("a section of the recording has audio but no video frames")
+			return mediaInputFailure(errors.New("a section of the recording has audio but no video frames"))
 		}
 		// Keep the concat and audio clocks intact. Both scale and pad must
 		// recompute their geometry when the incoming picture size changes.
@@ -146,10 +146,10 @@ func frameSize(ctx context.Context, path, section string) (int, int, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, 0, ffmpegCause(err, stderr.String())
+		return 0, 0, processingFailure(ctx.Err(), err, stderr.String(), "read the recording's video dimensions")
 	}
 	if len(out) < 24 || string(out[12:16]) != "IHDR" {
-		return 0, 0, errors.New("FFmpeg could not read the section's video dimensions")
+		return 0, 0, mediaInputFailure(errors.New("FFmpeg could not read the section's video dimensions"))
 	}
 	return int(binary.BigEndian.Uint32(out[16:20])), int(binary.BigEndian.Uint32(out[20:24])), nil
 }

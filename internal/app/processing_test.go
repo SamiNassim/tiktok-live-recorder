@@ -62,13 +62,13 @@ func TestFailedConversionShowsToastOnEveryPage(t *testing.T) {
 			if !a.refreshVisible() {
 				t.Fatal("conversion failure did not request a repaint", page)
 			}
-			const message = "The recording contains damaged or incomplete media data; raw FLV kept"
-			if len(a.processingFailures) != 1 || a.processingFailures[0].Message != message {
+			const message = "Normal conversion and automatic repair failed: The recording contains damaged or incomplete media data; raw FLV kept"
+			if len(a.processingFailures) != 1 || !a.processingFailures[0].Repair || a.processingFailures[0].Message != message {
 				t.Fatal("conversion failure did not reach the UI", a.processingFailures)
 			}
 			logged := false
 			for _, entry := range a.logs {
-				if entry.Message == "Processed copy failed: "+message && entry.Streamer == row.StreamerID {
+				if entry.Message == "Recording repair failed: "+message && entry.Streamer == row.StreamerID {
 					if !strings.Contains(entry.Details, "FFmpeg output:") {
 						t.Fatal("readable failure log lost FFmpeg's diagnostics")
 					}
@@ -79,7 +79,7 @@ func TestFailedConversionShowsToastOnEveryPage(t *testing.T) {
 				t.Fatal("manual failure log does not match the toast explanation")
 			}
 			tt.Frame()
-			if !tt.HasText("MP4 conversion failed") || !tt.HasText("damaged.flv\n"+message) || !tt.HasText("View logs") {
+			if !slices.Contains(tt.Texts(), "Recording repair failed") || !tt.HasText("damaged.flv\n"+message) || !tt.HasText("View logs") {
 				t.Fatal("conversion toast is missing its clear reason, filename or logs action", tt.Texts())
 			}
 			if len(a.processingFailures) != 0 || len(a.engine.TakeProcessingFailures()) != 0 {
@@ -97,14 +97,14 @@ func TestFailedConversionShowsToastOnEveryPage(t *testing.T) {
 				t.Fatal("an identical retry failure was suppressed")
 			}
 			tt.Frame()
-			if !tt.HasText("MP4 conversion failed") {
+			if !slices.Contains(tt.Texts(), "Recording repair failed") {
 				t.Fatal("repeated retry failed silently")
 			}
 			tt.Move(0, 0) // Hovering the toast deliberately pauses its timeout.
 			tt.Advance(11 * time.Second)
 			a.refreshVisible()
 			tt.Frame()
-			if tt.HasText("MP4 conversion failed") {
+			if slices.Contains(tt.Texts(), "Recording repair failed") {
 				t.Fatal("expired feedback was shown again")
 			}
 			if got, err := os.ReadFile(raw); err != nil || string(got) != original {
@@ -123,19 +123,20 @@ func TestConversionFailureToastLayout(t *testing.T) {
 				a.processingFailures = []monitor.ProcessingFailure{{
 					StreamerID: "demo_creator",
 					Path:       "@demo_creator_2026-01-01_12-00-00_01234567.flv",
-					Message:    "The recording contains damaged or incomplete media data; raw FLV kept",
+					Message:    "Normal conversion and automatic repair failed: The recording contains damaged or incomplete media data; raw FLV kept",
+					Repair:     true,
 				}}
 				tt := ui.NewTester(a.view, width, 650)
 				tt.Advance(300 * time.Millisecond)
 				for _, text := range tt.Texts() {
-					if !strings.Contains(text, "damaged or incomplete") && text != "MP4 conversion failed" && text != "View logs" {
+					if !strings.Contains(text, "damaged or incomplete") && text != "Recording repair failed" && text != "View logs" {
 						continue
 					}
 					if r, ok := tt.Find(text); !ok || r.X < 0 || r.Y < 0 || r.X+r.W > float32(width) || r.Y+r.H > 650 {
 						t.Fatal("conversion feedback overflows the window", text, r)
 					}
 				}
-				if !slices.Contains(tt.Texts(), "MP4 conversion failed") {
+				if !slices.Contains(tt.Texts(), "Recording repair failed") {
 					t.Fatal("conversion toast is missing")
 				}
 				if dir := os.Getenv("TIKTOK_UI_SNAPSHOTS"); dir != "" {

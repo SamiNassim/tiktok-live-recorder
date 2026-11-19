@@ -93,6 +93,52 @@ func TestProcessingMessagesDistinguishFailureStageAndCause(t *testing.T) {
 	}
 }
 
+func TestAutomaticRepairRequiresMediaFailure(t *testing.T) {
+	for _, tc := range []struct {
+		stderr string
+		want   bool
+	}{
+		{"Invalid data found when processing input", true},
+		{"error while decoding MB 2 3", true},
+		{"[h264] pps_id 42 out of range", true},
+		{"Error decoding AAC frame header.", true},
+		{"Error submitting packet to decoder", true},
+		{"corrupt decoded frame in stream 0", true},
+		{"Invalid NAL unit size", true},
+		{"non monotonically increasing dts", true},
+		{"not currently supported in container", true},
+		{"No space left on device\nInvalid data found when processing input", false},
+		{"Permission denied\nInvalid NAL unit size", false},
+		{"Input/output error\nerror while decoding", false},
+		{"Read-only file system\nPacket corrupt", false},
+		{"Unknown encoder 'synthetic'\nPacket corrupt", false},
+		{"No such filter: 'synthetic'\nPacket corrupt", false},
+		{"Unable to parse option value\nError decoding AAC frame header.", false},
+		{"Unrecognized option 'synthetic'", false},
+		{"unclassified FFmpeg failure", false},
+	} {
+		t.Run(tc.stderr, func(t *testing.T) {
+			err := processingFailure(nil, errors.New("synthetic exit failure"), tc.stderr, "create the processed copy")
+			if got := CanRepair(err); got != tc.want {
+				t.Fatalf("CanRepair() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	media := mediaInputFailure(errors.New("synthetic incomplete packet"))
+	if !CanRepair(fault.Action("input parsing failed", media)) {
+		t.Fatal("input parsing failure was not eligible for repair")
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, &os.PathError{Op: "read", Path: "synthetic.flv", Err: os.ErrPermission}} {
+		if CanRepair(errors.Join(media, cause)) || CanRepair(mediaInputFailure(cause)) {
+			t.Fatal("operating-system or cancellation failure triggered repair", cause)
+		}
+	}
+	// A later recovery failure takes precedence over its original media error.
+	if CanRepair(&processingError{error: errors.Join(errors.New("encoder unavailable"), media)}) {
+		t.Fatal("an earlier input error hid the failed recovery stage")
+	}
+}
+
 func TestProcessingReportsCodecChangeEvenWhenFFmpegExitsWithError(t *testing.T) {
 	path, err := ffmpeg.Find("")
 	if err != nil {

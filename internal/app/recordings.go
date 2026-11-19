@@ -146,7 +146,7 @@ func (a *application) recordingRepairDialog(c *ui.Context) {
 		r := a.repairTarget
 		ui.Text(c, "Try to repair this recording?").FontSize(22).FontWeight(600)
 		ui.Text(c, filepath.Base(r.Path)).FontSize(12).TextColor(c.Theme().TextMuted).Width(440)
-		ui.Text(c, "Try this if a normal MP4 conversion fails. Repair uses a more tolerant conversion to create a new playback copy.").Width(440)
+		ui.Text(c, "Start with a more tolerant conversion to create a new playback copy. Normal conversion tries repair automatically if damaged media prevents it from finishing.").Width(440)
 		ui.Text(c, "Damaged video or audio may be skipped or reconstructed. The repaired copy may contain visual glitches, gaps, audio sync issues, or reduced quality.").Width(440)
 		ui.Text(c, "The original FLV and any existing MP4 copies are always kept. Repair can take longer and may still fail.").Width(440)
 		if strings.TrimSpace(a.cfg.FFmpegArgs) != "" {

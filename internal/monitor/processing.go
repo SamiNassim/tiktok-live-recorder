@@ -205,7 +205,7 @@ func (e *Engine) processCopyMode(id, source string, cfg state.Config, repair boo
 		} else {
 			e.log.Write("INFO", id, "Creating a processed copy; raw FLV is kept until processing completes")
 		}
-		copy, err := process(ctx, source, cfg, func(progress recording.Progress) {
+		report := func(progress recording.Progress) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			if ctx.Err() == nil && e.processingJobs[source] == job && job.Progress != progress {
@@ -213,7 +213,26 @@ func (e *Engine) processCopyMode(id, source string, cfg state.Config, repair boo
 				job.Pass, job.Passes, job.Percent, job.Overall = job.tracker.update(progress)
 				e.processingRevision++
 			}
-		})
+		}
+		copy, err := process(ctx, source, cfg, report)
+		if !repair && ctx.Err() == nil && recording.CanRepair(err) {
+			normalErr := err
+			e.log.WriteError("WARN", id, "Normal MP4 conversion failed: "+fault.Reason(err)+". Trying tolerant repair; original FLV and existing copies are kept", err)
+			// Stay in this queue slot and job so cancellation and duplicate
+			// protection cover both attempts. Repair never inherits cleanup or
+			// custom output options, including when started automatically.
+			repair, deleteRaw = true, false
+			cfg.FFmpegArgs, cfg.DeleteRawAfterProcessing = "", false
+			e.mu.Lock()
+			job.Repair = true
+			e.processingRevision++
+			e.mu.Unlock()
+			report(recording.Progress{Phase: "Preparing repair"})
+			copy, err = e.repair(ctx, source, cfg, report)
+			if err != nil && ctx.Err() == nil {
+				err = fault.Action("Normal conversion and automatic repair failed: "+fault.Reason(err), errors.Join(err, normalErr))
+			}
+		}
 		path := copy.Path
 		deleteRaw = deleteRaw && !copy.Reencoded && !repair
 		if e.ctx.Err() != nil {
