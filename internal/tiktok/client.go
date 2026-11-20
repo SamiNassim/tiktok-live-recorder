@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tiktok-live-recorder/internal/fault"
+	"tiktok-live-recorder/internal/network"
 )
 
 var (
@@ -57,6 +58,29 @@ func NewClient() *Client {
 	}}, base: Origin, webcast: "https://webcast.tiktok.com", delay: 2 * time.Second}
 }
 
+// ConfigureProxy replaces only future API requests, preserving the global pacing queue.
+func (c *Client) ConfigureProxy(cfg network.Config) error {
+	transport, err := network.NewTransport(cfg)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	old := c.http
+	client := *old
+	client.Transport = network.Protect(transport, cfg)
+	c.http = &client
+	c.mu.Unlock()
+	old.CloseIdleConnections()
+	return nil
+}
+
+func (c *Client) CloseIdleConnections() {
+	c.mu.Lock()
+	client := c.http
+	c.mu.Unlock()
+	client.CloseIdleConnections()
+}
+
 func (c *Client) Configure(cookie string, delay time.Duration) {
 	if parsed, err := ParseCookie(cookie); err == nil {
 		cookie = parsed
@@ -74,7 +98,7 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 	}
 	at := maxTime(time.Now(), c.next)
 	c.next = at.Add(c.delay)
-	cookie := c.cookie
+	cookie, client := c.cookie, c.http
 	c.mu.Unlock()
 	t := time.NewTimer(time.Until(at))
 	defer t.Stop()
@@ -98,7 +122,7 @@ func (c *Client) get(ctx context.Context, address string, target any) error {
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fault.Wrap("TikTok did not answer the request: "+fault.Reason(err), err)
 	}

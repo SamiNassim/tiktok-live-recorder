@@ -12,22 +12,33 @@ import (
 	"time"
 
 	"tiktok-live-recorder/internal/fault"
+	"tiktok-live-recorder/internal/network"
 )
 
 // OpenFLV validates the header, then returns every original byte, including
 // that header. No tags, timestamps, metadata, or codec packets are rewritten.
 func OpenFLV(ctx context.Context, sources []Source) (io.ReadCloser, error) {
+	return OpenFLVWithProxy(ctx, sources, network.Config{})
+}
+
+func OpenFLVWithProxy(ctx context.Context, sources []Source, proxy network.Config) (io.ReadCloser, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 15 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			conn, err := dialer.DialContext(ctx, network, address)
-			if err != nil {
-				return nil, err
-			}
-			return readDeadlineConn{conn}, nil
-		},
+	transport, err := network.NewTransport(proxy)
+	if err != nil {
+		return nil, err
 	}
-	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ForceAttemptHTTP2 = false
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return readDeadlineConn{conn}, nil
+	}
+
+	client := &http.Client{Transport: network.Protect(transport, proxy), CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 || req.URL.Scheme != "https" {
 			return errors.New("unexpected media redirect")
 		}

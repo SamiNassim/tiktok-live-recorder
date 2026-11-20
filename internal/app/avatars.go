@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"tiktok-live-recorder/internal/network"
 )
 
 const maxCachedAvatars = 256
 const maxAvatarDownloads = 4
-
-var avatarClient = &http.Client{Timeout: 10 * time.Second}
 
 // avatar requests only thumbnails actually displayed by a virtualized row or
 // the verified account badge. Preview views never make network requests.
@@ -98,10 +97,17 @@ func (a *application) loadAvatar(address string) {
 		return
 	}
 	a.avatarLoading[address] = true
+	proxy := a.store.Config().Proxy
 	go func() {
 		ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 		defer cancel()
-		bitmap, err := fetchAvatar(ctx, avatarClient, address)
+		transport, err := network.NewTransport(proxy)
+		var bitmap *ui.Bitmap
+		if err == nil {
+			client := &http.Client{Timeout: 10 * time.Second, Transport: network.Protect(transport, proxy)}
+			bitmap, err = fetchAvatar(ctx, client, address)
+			transport.CloseIdleConnections()
+		}
 		if a.ctx.Err() != nil {
 			return
 		}

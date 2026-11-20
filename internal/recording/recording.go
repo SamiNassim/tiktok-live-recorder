@@ -6,11 +6,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -33,6 +33,8 @@ type Handle struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	result  Result
+	mu      sync.Mutex
+	clips   []Clip
 }
 
 func (h *Handle) Stop()                 { h.cancel() }
@@ -43,7 +45,7 @@ func (h *Handle) Started() time.Time    { return h.started }
 
 func Start(parent context.Context, s state.Streamer, source tiktok.Stream, cfg state.Config) (*Handle, error) {
 	ctx, cancel := context.WithCancel(parent)
-	body, err := tiktok.OpenFLV(ctx, source.Sources)
+	body, err := tiktok.OpenFLVWithProxy(ctx, source.Sources, cfg.Proxy)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -78,27 +80,18 @@ func start(ctx context.Context, cancel context.CancelFunc, s state.Streamer, cfg
 		// Closing the body unblocks stalled reads immediately on pause/quit.
 		stopClose := context.AfterFunc(ctx, func() { body.Close() })
 		defer stopClose()
-		writer := &syncWriter{file: file, last: time.Now()}
-		count, copyErr := io.CopyBuffer(writer, body, make([]byte, 128<<10))
-		if ctx.Err() != nil && !writer.failed {
+		capture := &splitCapture{handle: h, writer: &syncWriter{file: file, last: time.Now()}, path: path, started: stamp, part: 1}
+		var copyErr error
+		if cfg.SplitEnabled() {
+			copyErr = capture.copyFLV(body, time.Duration(cfg.SplitMinutes)*time.Minute, cfg.SplitBytes)
+		} else {
+			_, copyErr = io.CopyBuffer(capture.writer, body, make([]byte, 128<<10))
+		}
+		if ctx.Err() != nil && !capture.writer.failed && !fault.RequiresAction(copyErr) {
 			copyErr = nil
 		}
-		syncErr, closeErr := file.Sync(), file.Close()
-		transportEnded := count > 0 && errors.Is(copyErr, io.ErrUnexpectedEOF) && !writer.failed && syncErr == nil && closeErr == nil
-		if copyErr != nil && !writer.failed {
-			copyErr = fault.Wrap("the video connection was interrupted: "+fault.Reason(copyErr), copyErr)
-		}
-		if syncErr != nil {
-			syncErr = fault.Action("could not synchronize the raw FLV to disk; check disk space and drive connectivity", syncErr)
-		}
-		if closeErr != nil {
-			closeErr = fault.Action("could not close the raw FLV file safely; check the recording drive", closeErr)
-		}
-		err := errors.Join(copyErr, syncErr, closeErr)
-		if count == 0 && err == nil {
-			err = fault.Wrap("the video connection ended before any FLV data was received", nil)
-		}
-		r := Result{Path: path, Bytes: count, EndedAt: time.Now(), Err: err, TransportEnded: transportEnded}
+		r := capture.finish(copyErr)
+
 		h.result = r
 	}()
 	return h, nil
@@ -110,17 +103,26 @@ func recordingPath(s state.Streamer, cfg state.Config, stamp time.Time, suffix s
 	if cfg.FolderPerStreamer {
 		dir = filepath.Join(dir, id+"_"+safeName(s.DisplayName()))
 	}
-	return filepath.Join(dir, id+"_"+stamp.Format("2006-01-02_15-04-05")+"_"+suffix+".flv")
+	base := id + "_" + stamp.Format("2006-01-02_15-04-05") + "_" + suffix
+	if cfg.SplitEnabled() {
+		if cfg.FolderPerSplitRecording {
+			dir = filepath.Join(dir, base)
+		}
+		base += "_part001"
+	}
+	return filepath.Join(dir, base+".flv")
 }
 
 type syncWriter struct {
 	file   *os.File
 	last   time.Time
 	failed bool
+	count  int64
 }
 
 func (w *syncWriter) Write(p []byte) (int, error) {
 	n, err := w.file.Write(p)
+	w.count += int64(n)
 	if err != nil {
 		err = fault.Action("could not write incoming video to the raw FLV file; check disk space and folder permissions", err)
 	}

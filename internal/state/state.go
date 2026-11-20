@@ -10,25 +10,42 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tiktok-live-recorder/internal/network"
 )
 
 type Config struct {
-	Window                   Window `json:"window"`
-	Theme                    string `json:"theme"`
-	RecordingPath            string `json:"recording_path"`
-	FFmpegPath               string `json:"ffmpeg_path,omitempty"`
-	Cookie                   string `json:"tiktok_cookies,omitempty"`
-	PollingEnabled           bool   `json:"polling_enabled"`
-	PollSeconds              int    `json:"poll_seconds"`
-	ColdSeconds              int    `json:"cold_seconds"`
-	RequestDelaySeconds      int    `json:"request_delay_seconds"`
-	AutoPromote              bool   `json:"auto_promote"`
-	Notifications            bool   `json:"notifications"`
-	FolderPerStreamer        bool   `json:"folder_per_streamer"`
-	PostProcess              bool   `json:"post_process"`
-	DeleteRawAfterProcessing bool   `json:"delete_raw_after_processing"`
-	FFmpegArgs               string `json:"ffmpeg_args"`
+	Window                   Window         `json:"window"`
+	Theme                    string         `json:"theme"`
+	RecordingPath            string         `json:"recording_path"`
+	FFmpegPath               string         `json:"ffmpeg_path,omitempty"`
+	Cookie                   string         `json:"tiktok_cookies,omitempty"`
+	Proxy                    network.Config `json:"proxy,omitempty"`
+	PollingEnabled           bool           `json:"polling_enabled"`
+	PollSeconds              int            `json:"poll_seconds"`
+	ColdSeconds              int            `json:"cold_seconds"`
+	RequestDelaySeconds      int            `json:"request_delay_seconds"`
+	AutoPromote              bool           `json:"auto_promote"`
+	Notifications            bool           `json:"notifications"`
+	FolderPerStreamer        bool           `json:"folder_per_streamer"`
+	FolderPerSplitRecording  bool           `json:"folder_per_split_recording"`
+	SplitMinutes             int            `json:"split_minutes,omitempty"`
+	SplitBytes               int64          `json:"split_bytes,omitempty"`
+	SplitSizeUnit            string         `json:"split_size_unit,omitempty"`
+	PostProcess              bool           `json:"post_process"`
+	DeleteRawAfterProcessing bool           `json:"delete_raw_after_processing"`
+	FFmpegArgs               string         `json:"ffmpeg_args"`
 }
+
+const MaxSplitMinutes = (1<<31 - 1) / 60_000
+const (
+	BytesPerMB    int64 = 1_000_000
+	BytesPerGB    int64 = 1_000_000_000
+	MinSplitBytes       = BytesPerMB
+	MaxSplitBytes       = 1000 * BytesPerGB
+)
+
+func (c Config) SplitEnabled() bool { return c.SplitMinutes > 0 || c.SplitBytes > 0 }
 
 type Window struct {
 	X          int  `json:"x"`
@@ -84,10 +101,26 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{Theme: "system", RecordingPath: filepath.Join(home, "Movies", "TikTok Live Recorder"), PollingEnabled: true,
 		PollSeconds: 75, ColdSeconds: 300, RequestDelaySeconds: 2, AutoPromote: true, Notifications: true, FolderPerStreamer: true,
-		PostProcess: true}
+		PostProcess: true, FolderPerSplitRecording: true, SplitSizeUnit: "GB"}
 }
 
 func (c Config) Validate() error {
+	if err := c.Proxy.Validate(); err != nil {
+		return err
+	}
+	if c.SplitMinutes < 0 || c.SplitMinutes > MaxSplitMinutes {
+		return fmt.Errorf("recording split interval must be between 0 and %d minutes", MaxSplitMinutes)
+	}
+	if c.SplitBytes != 0 && (c.SplitBytes < MinSplitBytes || c.SplitBytes > MaxSplitBytes) {
+		return errors.New("recording split size must be between 1 MB and 1000 GB")
+	}
+	if c.SplitMinutes > 0 && c.SplitBytes > 0 {
+		return errors.New("choose either duration or file size for recording splitting")
+	}
+	if c.SplitSizeUnit != "" && c.SplitSizeUnit != "MB" && c.SplitSizeUnit != "GB" {
+		return errors.New("choose MB or GB for the recording split size")
+	}
+
 	if c.Theme != "system" && c.Theme != "dark" && c.Theme != "light" {
 		return errors.New("choose System, Dark, or Light appearance")
 	}

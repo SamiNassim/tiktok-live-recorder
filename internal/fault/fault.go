@@ -116,7 +116,7 @@ func details(err error) string {
 	return err.Error()
 }
 
-var links = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
+var links = regexp.MustCompile(`(?i)(?:https?|socks5h?)://[^\s<>"']+`)
 var cookies = regexp.MustCompile(`(?i)\b(sessionid(?:_ss)?|sid_tt|sid_guard|uid_tt(?:_ss)?|tt_chain_token|msToken|passport_csrf_token)\s*=\s*[^;\s]+`)
 
 // Redact never retains signed request/media URLs or known session cookie values.

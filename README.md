@@ -93,6 +93,22 @@ Cookies grant account access. They are stored locally in `config.json`, not sent
 to external signing services or written to application logs. Do not share your
 configuration file or paste your cookies into issue reports.
 
+## Proxy settings
+
+**Settings → Proxy** optionally routes TikTok account validation, discovery,
+thumbnails, and recordings through an HTTP, HTTPS, or SOCKS5 proxy. Enter the
+proxy URL with its port, then use the separate username and password fields if
+required. Save settings to apply it. Credentials are stored locally in the
+configuration file. Disabling this setting preserves Go's environment proxy
+behavior.
+
+Use a fixed exit IP that works with your TikTok session and region. A proxy can
+change routing; TikTok may still block that IP, restrict playback, or require a
+fresh session. Account cookies are sent only to TikTok API hosts, never media
+hosts. Failed proxy connections do not fall back to a direct connection.
+Saving a proxy change stops active recordings safely; the monitoring queue
+checks again and starts new files through the saved route when enabled.
+
 ## Recordings
 
 Every recording starts with the **original HTTP-FLV byte stream**, saved directly
@@ -121,6 +137,29 @@ copy by default.
   **Clear history…** removes all completed entries. These actions keep the files
   on disk and leave active recordings in the list.
 - Removing a streamer never deletes existing recordings.
+
+### Split recordings
+
+In **Settings → Recording → Split recordings**, choose **Off**, **By duration**,
+or **By file size**. Duration offers **30 minutes**, **1 hour**, or a custom
+whole number of minutes. File size accepts **MB** or **GB** in decimal units,
+from 1 MB to 1000 GB. These settings apply to new recordings.
+
+Video cuts at the next keyframe, so a clip can exceed the requested duration or
+size. Audio-only streams cut between audio packets. The same HTTP connection
+continues across clips; splitting does not check the streamer again. Source
+tags and timestamps stay unchanged. Each new FLV repeats the original stream
+header and the latest metadata and codec headers to initialize playback.
+
+Clips use numbered names ending in `_part001.flv`, `_part002.flv`, and so on.
+**Group split clips in a separate folder** creates a folder for each recording
+session. Disable it to save clips directly in the recording folder, or the
+streamer's folder if **Separate folder for each streamer** is enabled. The two
+folder preferences are independent. Reconnection starts a new recording session.
+
+Completed clips enter **Recordings** and can be processed while the stream
+continues. Optional processing and raw cleanup apply separately to each
+completed clip, with the same verification and retention rules as other files.
 
 ### Playback copies and FFmpeg
 
@@ -253,14 +292,15 @@ successfully.
 ## Settings and local data
 
 Settings include appearance, the recordings folder, polling intervals, account
-cookies, optional FFmpeg processing, and desktop recording-start notifications.
+cookies, proxy routing, recording splits, optional FFmpeg processing, and desktop
+recording-start notifications.
 Notifications can be disabled and may also require OS notification permission.
 An **Unsaved settings** warning remains visible until you save or restore the
 previous values. Successful saves display a temporary confirmation.
 
 The configuration directory contains:
 
-- `config.json`: preferences and optional account cookies.
+- `config.json`: preferences, optional account cookies, and proxy credentials.
 - `data.json`: streamers and recording history; no database is used.
 - `tiktok-live-recorder.log`, `.log.1`, `.log.2`: rotating logs, up to approximately
   15 MB total. The UI retains up to 5,000 entries and filters before displaying

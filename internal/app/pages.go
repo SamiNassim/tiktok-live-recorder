@@ -367,7 +367,8 @@ func section(c *ui.Context, title, subtitle string, body func()) ui.Element {
 		body()
 	})
 }
-func toggle(c *ui.Context, label, detail string, value *bool) {
+func toggle(c *ui.Context, label, detail string, value *bool) ui.Element {
+	var control ui.Element
 	ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, label).FontWeight(500)
@@ -375,8 +376,9 @@ func toggle(c *ui.Context, label, detail string, value *bool) {
 				ui.Text(c, detail).TextColor(c.Theme().TextMuted).FontSize(11).MaxLines(3)
 			}
 		})
-		ui.Switch(c, value).Label(label)
+		control = ui.Switch(c, value).Label(label)
 	})
+	return control
 }
 func number(c *ui.Context, label string, value *float64, lo, hi float64) {
 	ui.Column(c).Grow(1).Gap(8).Children(func() {
@@ -465,6 +467,7 @@ func (a *application) settings(c *ui.Context) {
 		if a.accountSettingsRequested {
 			accountSection.ScrollIntoView()
 		}
+		a.proxySettings(c)
 		a.pollingQueue(c)
 		section(c, "Recording", "The original stream is recorded byte for byte as FLV.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
@@ -474,6 +477,7 @@ func (a *application) settings(c *ui.Context) {
 				}
 			})
 			toggle(c, "Separate folder for each streamer", "Folder names start with @username, followed by the display name.", &a.cfg.FolderPerStreamer)
+			a.splitSettings(c)
 			toggle(c, "Create a processed copy with FFmpeg", "Creates a verified MP4 after recording ends. Copies compatible streams and automatically re-encodes when needed for continuous playback.", &a.cfg.PostProcess)
 			if !a.cfg.PostProcess {
 				a.cfg.DeleteRawAfterProcessing = false

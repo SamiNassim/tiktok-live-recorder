@@ -81,6 +81,10 @@ type application struct {
 	ffmpegCancel                                 context.CancelFunc
 
 	normalSeconds, coldSeconds, delaySeconds float64
+	splitChoice                              string
+	splitMinutes                             float64
+	splitMode, splitSizeUnit                 string
+	splitSize                                float64
 	cookieEditedAt                           time.Time
 	cookieLastChecked                        string
 }
@@ -103,6 +107,30 @@ func (a *application) loadNumbers() {
 	a.normalSeconds = float64(a.cfg.PollSeconds)
 	a.coldSeconds = float64(a.cfg.ColdSeconds)
 	a.delaySeconds = float64(a.cfg.RequestDelaySeconds)
+	a.splitMinutes = float64(a.cfg.SplitMinutes)
+	a.splitMode = "Off"
+	a.splitSizeUnit = a.cfg.SplitSizeUnit
+	if a.splitSizeUnit == "" {
+		a.splitSizeUnit = "GB"
+	}
+	a.splitSize = 2 * float64(state.BytesPerGB) / a.splitSizeScale()
+	if a.cfg.SplitBytes > 0 {
+		a.splitMode = "By file size"
+		a.splitSize = float64(a.cfg.SplitBytes) / a.splitSizeScale()
+	} else if a.cfg.SplitMinutes > 0 {
+		a.splitMode = "By duration"
+	}
+	switch a.cfg.SplitMinutes {
+	case 0:
+		a.splitChoice = "30 minutes"
+		a.splitMinutes = 30
+	case 30:
+		a.splitChoice = "30 minutes"
+	case 60:
+		a.splitChoice = "1 hour"
+	default:
+		a.splitChoice = "Custom"
+	}
 }
 func (a *application) update(fn func()) {
 	if a.window != nil {
@@ -456,6 +484,7 @@ func (a *application) validateCookie() {
 		return
 	}
 	raw := a.cfg.Cookie
+	proxy := a.cfg.Proxy
 	a.cookieLastChecked = raw
 	cookie, err := tiktok.ParseCookie(raw)
 	a.account = nil
@@ -472,14 +501,19 @@ func (a *application) validateCookie() {
 	a.accountMessage = "Validating account…"
 	go func() {
 		client := tiktok.NewClient()
+		defer client.CloseIdleConnections()
+		if err := client.ConfigureProxy(proxy); err != nil {
+			a.update(func() { a.validating = false; a.accountMessage = err.Error(); a.accountError = err })
+			return
+		}
 		client.Configure(cookie, time.Second)
 		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
 		defer cancel()
 		account, err := client.Account(ctx)
 		a.update(func() {
 			a.validating = false
-			if a.cfg.Cookie != raw {
-				a.accountMessage = "Cookie changed; validate again."
+			if a.cfg.Cookie != raw || a.cfg.Proxy != proxy {
+				a.accountMessage = "Connection or cookie changed; validate again."
 				return
 			}
 			if err != nil {

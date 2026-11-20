@@ -14,6 +14,7 @@ import (
 
 	"tiktok-live-recorder/internal/fault"
 	"tiktok-live-recorder/internal/logging"
+	"tiktok-live-recorder/internal/network"
 	"tiktok-live-recorder/internal/recording"
 	"tiktok-live-recorder/internal/state"
 	"tiktok-live-recorder/internal/tiktok"
@@ -114,12 +115,18 @@ func (e *Engine) wakeUp() {
 }
 func (e *Engine) configure(c state.Config) {
 	e.client.Configure(c.Cookie, time.Duration(c.RequestDelaySeconds)*time.Second)
+	if client, ok := e.client.(interface{ ConfigureProxy(network.Config) error }); ok {
+		_ = client.ConfigureProxy(c.Proxy)
+	}
 }
 func (e *Engine) Close() {
 	e.mu.Lock()
 	e.cancel()
 	e.mu.Unlock()
 	e.wg.Wait()
+	if client, ok := e.client.(interface{ CloseIdleConnections() }); ok {
+		client.CloseIdleConnections()
+	}
 }
 
 func (e *Engine) SaveConfig(c state.Config) error {
@@ -133,12 +140,17 @@ func (e *Engine) SaveConfig(c state.Config) error {
 			return err
 		}
 	}
+	e.mu.Lock()
+	oldProxy := e.store.Config().Proxy
 	if err = e.store.SaveConfig(c); err != nil {
+		e.mu.Unlock()
 		return err
 	}
 	e.configure(c)
-	e.mu.Lock()
 	for _, it := range e.items {
+		if oldProxy != c.Proxy {
+			stop(it)
+		}
 		it.queueCheck()
 		it.failures = 0
 		if !c.PollingEnabled {
@@ -407,6 +419,7 @@ func (e *Engine) reconcile() {
 		}
 		it.row.Streamer = s
 		if it.handle != nil {
+			e.collectClips(it)
 			select {
 			case <-it.handle.Done():
 				e.completed(it)
@@ -471,6 +484,7 @@ func (e *Engine) check(id string) {
 		e.mu.Unlock()
 		return
 	}
+	checkedProxy := e.store.Config().Proxy
 	previousStatus := it.row.Status
 	it.row.Status = "Checking"
 	e.mu.Unlock()
@@ -478,12 +492,12 @@ func (e *Engine) check(id string) {
 	if e.ctx.Err() != nil {
 		return
 	}
-	cfg := e.store.Config()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	cfg := e.store.Config()
 	data := e.store.Data()
 	at := slices.IndexFunc(data.Streamers, func(s state.Streamer) bool { return s.ID == id })
-	if at < 0 || data.Streamers[at].Paused || !cfg.PollingEnabled {
+	if at < 0 || data.Streamers[at].Paused || !cfg.PollingEnabled || cfg.Proxy != checkedProxy {
 		it.row.Status = "Waiting"
 		return
 	}
@@ -623,10 +637,39 @@ func (e *Engine) check(id string) {
 	}
 }
 
+// collectClips publishes durable parts while the same media connection stays open.
+// The caller holds e.mu; converters use the settings captured at recording start.
+func (e *Engine) collectClips(it *item) {
+	source, ok := it.handle.(interface{ TakeClips() []recording.Clip })
+	if !ok {
+		return
+	}
+	for _, clip := range source.TakeClips() {
+		e.persist(func(d *state.Data) {
+			for i := range d.Recordings {
+				if d.Recordings[i].Path == clip.Path {
+					d.Recordings[i].EndedAt, d.Recordings[i].Bytes = clip.EndedAt, clip.Bytes
+					d.Recordings[i].Error = fault.Reason(clip.Err)
+				}
+			}
+			d.Recordings = append(d.Recordings, state.Recording{ID: fmt.Sprintf("%d-%s", clip.NextStartedAt.UnixNano(), it.row.Streamer.ID), StreamerID: it.row.Streamer.ID, Name: it.row.Streamer.DisplayName(), Path: clip.NextPath, StartedAt: clip.NextStartedAt})
+		})
+		it.row.Path = clip.NextPath
+		if clip.Err == nil && clip.Bytes > 13 && it.config.PostProcess && e.ctx.Err() == nil {
+			e.processCopy(it.row.Streamer.ID, clip.Path, it.config)
+		}
+		e.log.WriteError("INFO", it.row.Streamer.ID, "Raw FLV clip completed", clip.Err)
+	}
+}
+
 func (e *Engine) completed(it *item) {
+	e.collectClips(it)
 	immediate := it.row.Status == "Finalizing" || it.row.Streamer.RecordingPaused || it.row.Streamer.Paused
 	r := it.handle.Result()
-	initial := it.handle.File()
+	initial := r.Path
+	if initial == "" {
+		initial = it.handle.File()
+	}
 	e.persist(func(d *state.Data) {
 		for i := range d.Recordings {
 			if d.Recordings[i].Path == initial {
