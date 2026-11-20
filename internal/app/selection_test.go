@@ -43,15 +43,15 @@ func TestSelectedStreamerRowKeepsEveryElementReadable(t *testing.T) {
 					if a.streamSelected != 0 {
 						t.Fatal("the streamer row is not selected")
 					}
-					// A native selected row uses the accent background, which
-					// turns this app's monochrome palette to the opposite theme.
+					// Explicit colors use the opposite monochrome palette;
+					// inherited text uses the table's native accent foreground.
 					selected := palette(theme != "dark")
 					frame := tt.Image()
 					for _, text := range []struct {
 						label string
 						color ui.Color
 					}{
-						{"Demo Creator", selected.Text},
+						{"Demo Creator", palette(theme == "dark").AccentText},
 						{"@demo", selected.TextMuted},
 						{"View logs", selected.Accent},
 						{"●  Needs attention", selected.Warning},
