@@ -3,6 +3,7 @@ package tiktok
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -22,22 +23,10 @@ func OpenFLV(ctx context.Context, sources []Source) (io.ReadCloser, error) {
 }
 
 func OpenFLVWithProxy(ctx context.Context, sources []Source, proxy network.Config) (io.ReadCloser, error) {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport, err := network.NewTransport(proxy)
+	transport, err := mediaTransport(proxy)
 	if err != nil {
 		return nil, err
 	}
-	transport.ResponseHeaderTimeout = 15 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ForceAttemptHTTP2 = false
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		conn, err := dialer.DialContext(ctx, network, address)
-		if err != nil {
-			return nil, err
-		}
-		return readDeadlineConn{conn}, nil
-	}
-
 	client := &http.Client{Transport: network.Protect(transport, proxy), CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 || req.URL.Scheme != "https" {
 			return errors.New("unexpected media redirect")
@@ -50,6 +39,38 @@ func OpenFLVWithProxy(ctx context.Context, sources []Source, proxy network.Confi
 		return nil, err
 	}
 	return &mediaBody{Reader: reader, close: func() error { err := reader.Close(); transport.CloseIdleConnections(); return err }}, nil
+}
+
+// mediaTransport records over HTTP/1.1. The read-deadline dialer is not used by
+// the HTTP/2 stack. Cloning the default transport still advertises h2 after
+// HTTP/2 is disabled, so the CDN negotiates h2 and sends a SETTINGS frame the
+// HTTP/1 reader rejects as a malformed response.
+func mediaTransport(proxy network.Config) (*http.Transport, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport, err := network.NewTransport(proxy)
+	if err != nil {
+		return nil, err
+	}
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ForceAttemptHTTP2 = false
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	transport.Protocols = &protocols
+	cfg := &tls.Config{}
+	if transport.TLSClientConfig != nil {
+		cfg = transport.TLSClientConfig.Clone()
+	}
+	cfg.NextProtos = []string{"http/1.1"}
+	transport.TLSClientConfig = cfg
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return readDeadlineConn{conn}, nil
+	}
+	return transport, nil
 }
 
 func openFLV(ctx context.Context, client *http.Client, sources []Source) (io.ReadCloser, error) {
